@@ -25,7 +25,7 @@ export class R2 {
     allHeaders.Authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders.join(';')}, Signature=${hex(await hmac(signingKey, stringToSign))}`;
     const url = `${this.endpoint}${path}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
     const response = await fetch(url, { method, headers: allHeaders, body: body ? (onProgress ? progressBody(body, onProgress) : body) : undefined, ...(onProgress ? { duplex: 'half' } : {}) });
-    if (!response.ok) throw new Error(`${response.status}：${await response.text()}`);
+    if (!response.ok) throw new Error(`${response.status}：${await response.text() || response.statusText}`);
     return response;
   }
   async list(prefix = '', token) { const r = await this.request('GET', '', { query: { 'list-type': '2', prefix, 'continuation-token': token } }); const text = await r.text(); return { keys: xml(text, 'Key'), token: xml(text, 'NextContinuationToken')[0] }; }

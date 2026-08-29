@@ -61,7 +61,7 @@ async function action(name) {
   if (name === 'cancel') { selected.clear(); return render(); }
   if (name === 'album') { const album = prompt(`输入相册名称（已有：${index.albums.join('、')}）`); if (!album) return; if (!index.albums.includes(album)) index.albums.push(album); photos.forEach(p => p.album = album); }
   if (name === 'download') return Promise.all(photos.map(download));
-  if (name === 'delete') { if (!confirm(`将 ${photos.length} 张照片移入回收站？`)) return; for (const p of photos) { const trash = p.key.replace(/^photos\//, 'trash/'); await r2.copy(p.key, trash); await r2.delete(p.key); p.key = trash; p.trashed = true; p.deletedAt = new Date().toISOString(); } }
+  if (name === 'delete') { if (!confirm(`将 ${photos.length} 张照片移入回收站？`)) { selected.clear(); return render(); } for (const p of photos) { const trash = p.key.replace(/^photos\//, 'trash/'); await r2.copy(p.key, trash); await r2.delete(p.key); p.key = trash; p.trashed = true; p.deletedAt = new Date().toISOString(); } }
   if (name === 'empty') { if (!confirm('确定彻底删除回收站中的所有照片？此操作无法撤销。')) return; for (const p of index.photos.filter(p => p.trashed)) await r2.delete(p.key); index.photos = index.photos.filter(p => !p.trashed); }
   selected.clear(); await save(); render();
 }
