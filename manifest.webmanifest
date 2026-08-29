@@ -1,0 +1,17 @@
+{
+  "name": "云端相册",
+  "short_name": "云端相册",
+  "description": "直接存储在您自己的 Cloudflare R2 桶中的私人相册。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "icons": [{"src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}],
+  "share_target": {
+    "action": "./?share-target=1",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {"files": [{"name": "images", "accept": ["image/*"]}]}
+  }
+}
