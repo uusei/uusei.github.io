@@ -11,7 +11,7 @@ function readLogs() {
 
 function writeLogs(logs) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(logs));
+    localStorage.setItem(KEY, JSON.stringify(logs || []));
   } catch {}
 }
 
@@ -36,7 +36,7 @@ export function finishUploadLog(id, { status, r2Key = '', error = '', finishedAt
 }
 
 export function listUploadLogs() {
-  return readLogs().sort((a, b) => new Date(b.startedAt || b.finishedAt || 0) - new Date(a.startedAt || a.finishedAt || 0));
+  return readLogs();
 }
 
 export function clearUploadLogs() {

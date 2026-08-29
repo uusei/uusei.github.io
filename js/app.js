@@ -7,7 +7,12 @@ let r2, index, view = 'timeline', selected = new Set(), current = null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const format = value => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value));
 const formatDateTime = value => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '-';
-const formatSize = value => Number.isFinite(value) ? (value < 1024 ? `${value} B` : `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`) : '-';
+const formatSize = value => {
+  if (!Number.isFinite(value)) return '-';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value / 1024 < 10 ? 1 : 0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value / (1024 * 1024) < 10 ? 1 : 0)} MB`;
+};
 const uuid = () => crypto.randomUUID();
 
 async function init() {
@@ -57,7 +62,9 @@ async function upload(files) {
     const startedAt = new Date().toISOString();
     const logId = createUploadLog({ fileName: file.name, fileSize: file.size, startedAt });
     const date = new Date(), ext = (file.name.split('.').pop() || 'jpg').toLowerCase(), key = `photos/${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${uuid()}.${ext}`;
-    try { toast(`正在上传 ${file.name}…`); await r2.put(key, file, (done, total) => toast(`正在上传 ${file.name} ${Math.round(done / total * 100)}%`)); const dimensions = await imageDimensions(file); index.photos.unshift({ id: uuid(), key, name: file.name, size: file.size, takenAt: date.toISOString(), uploadedAt: date.toISOString(), album: '', tags: [], dimensions, trashed: false }); await save(); finishUploadLog(logId, { status: 'success', r2Key: key, finishedAt: new Date().toISOString() }); } catch (error) { finishUploadLog(logId, { status: 'failed', r2Key: key, error: error?.message || String(error), finishedAt: new Date().toISOString() }); toast(`${file.name} 上传失败：${error.message}`, true); }
+    let uploaded = false;
+    let logStatus = 'success', logError = '';
+    try { toast(`正在上传 ${file.name}…`); await r2.put(key, file, (done, total) => toast(`正在上传 ${file.name} ${Math.round(done / total * 100)}%`)); uploaded = true; const dimensions = await imageDimensions(file); index.photos.unshift({ id: uuid(), key, name: file.name, size: file.size, takenAt: date.toISOString(), uploadedAt: date.toISOString(), album: '', tags: [], dimensions, trashed: false }); await save(); } catch (error) { const message = error?.message || String(error); logStatus = 'failed'; logError = uploaded ? `文件已上传到 R2，但索引更新失败：${message}` : message; toast(`${file.name} 上传失败：${message}`, true); } finally { finishUploadLog(logId, { status: logStatus, r2Key: uploaded ? key : '', error: logStatus === 'failed' ? logError : '', finishedAt: new Date().toISOString() }); }
   }
   lock?.release(); input.value = ''; render();
 }
