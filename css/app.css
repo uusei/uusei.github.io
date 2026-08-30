@@ -1088,15 +1088,14 @@ dialog#viewer {
   max-height: 100vh;
   margin: 0;
   border: 0;
-  background: rgba(5, 7, 12, 0.94);
-  backdrop-filter: blur(16px);
+  background: rgba(5, 7, 12, 0.92);
+  backdrop-filter: blur(12px);
   color: #fff;
   padding: 0;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: 1fr auto;
   z-index: 9999;
   animation: viewerFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  box-sizing: border-box;
 }
 
 @keyframes viewerFadeIn {
@@ -1108,200 +1107,6 @@ dialog#viewer {
   }
 }
 
-/* 顶部 Header 栏 */
-#viewer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 18px;
-  background: rgba(15, 23, 42, 0.82);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  z-index: 50;
-  gap: 12px;
-  min-height: 52px;
-  box-sizing: border-box;
-}
-
-.viewer-header-left,
-.viewer-header-right {
-  display: flex;
-  align-items: center;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.viewer-icon-btn {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.1rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.viewer-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.24);
-  transform: scale(1.05);
-}
-
-/* 顶部中间文件名、日期与大小展示 */
-#viewer-meta-top {
-  flex: 1 1 auto;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.9rem;
-  color: #e2e8f0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-#viewer-meta-top .meta-name {
-  font-weight: 600;
-  color: #fff;
-  max-width: 40vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#viewer-meta-top .meta-divider {
-  color: rgba(255, 255, 255, 0.35);
-  user-select: none;
-}
-
-#viewer-meta-top .meta-date,
-#viewer-meta-top .meta-size {
-  color: #94a3b8;
-  font-size: 0.85rem;
-  flex-shrink: 0;
-}
-
-/* 顶部关闭按钮 */
-#close {
-  font-size: 1.4rem;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-#close:hover {
-  background: rgba(239, 68, 68, 0.85);
-  border-color: transparent;
-  transform: scale(1.05);
-}
-
-/* 信息弹层卡片 (Popover) */
-.viewer-popover {
-  position: absolute;
-  top: calc(100% + 10px);
-  left: 0;
-  width: 320px;
-  max-width: calc(100vw - 32px);
-  background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 12px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  color: #f1f5f9;
-  z-index: 100;
-  overflow: hidden;
-  animation: popoverFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes popoverFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.popover-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: 0.9rem;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.popover-close-btn {
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  font-size: 1.2rem;
-  line-height: 1;
-  padding: 2px 6px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.popover-close-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.popover-body {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 0.82rem;
-}
-
-.popover-row {
-  display: flex;
-  line-height: 1.45;
-  word-break: break-all;
-}
-
-.popover-label {
-  color: #94a3b8;
-  width: 78px;
-  flex-shrink: 0;
-}
-
-.popover-val {
-  color: #e2e8f0;
-  flex: 1;
-}
-
-.popover-val.code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.78rem;
-  color: #cbd5e1;
-}
-
-.popover-val a {
-  color: #60a5fa;
-  text-decoration: underline;
-}
-
-/* 主展示区域 */
 #image-stage {
   overflow: hidden;
   display: flex;
@@ -1311,16 +1116,16 @@ dialog#viewer {
   position: relative;
   width: 100%;
   height: 100%;
-  padding: 16px;
+  padding: 20px;
   box-sizing: border-box;
 }
 
 #image-stage img {
-  max-width: 90vw;
-  max-height: calc(100vh - 140px);
+  max-width: 95vw;
+  max-height: calc(100vh - 120px);
   object-fit: contain;
   border-radius: 8px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   animation: viewerImgZoomIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   user-select: none;
@@ -1337,97 +1142,79 @@ dialog#viewer {
   }
 }
 
-/* 左右悬浮翻页按钮 */
-.viewer-nav-btn {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 20;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(15, 23, 42, 0.6);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: #fff;
-  font-size: 2rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  user-select: none;
-}
-
-.viewer-nav-btn.prev {
-  left: 20px;
-  padding-right: 2px;
-}
-
-.viewer-nav-btn.next {
-  right: 20px;
-  padding-left: 2px;
-}
-
-.viewer-nav-btn:hover {
-  background: rgba(37, 99, 235, 0.85);
-  border-color: rgba(255, 255, 255, 0.3);
-  transform: translateY(-50%) scale(1.1);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-}
-
-.viewer-nav-btn:active {
-  transform: translateY(-50%) scale(0.95);
-}
-
-/* 底部操作栏 */
 #viewer footer {
-  padding: 10px 16px;
+  padding: 12px 20px;
   display: flex;
   justify-content: center;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
   background: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(10px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  z-index: 20;
+  z-index: 10;
 }
 
 #viewer footer button {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 7px 14px;
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 12px;
+  border-radius: 6px;
   font-size: 0.85rem;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+  gap: 4px;
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
 #viewer footer button:hover {
   background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.25);
   transform: translateY(-1px);
 }
 
-#viewer footer button:active {
-  transform: translateY(0);
-}
-
 #viewer footer button.danger {
-  background: rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
   color: #fca5a5;
 }
 
 #viewer footer button.danger:hover {
   background: rgba(239, 68, 68, 0.4);
-  border-color: rgba(239, 68, 68, 0.6);
+}
+
+#viewer footer span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 200px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+#close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 20;
+  font-size: 1.6rem;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+}
+
+#close:hover {
+  background: rgba(239, 68, 68, 0.8);
+  transform: scale(1.08);
 }
 
 /* ================= 深色模式适配 ================= */
@@ -1635,28 +1422,5 @@ dialog#viewer {
 
   #viewer footer button {
     padding: 0.4rem 0.6rem;
-    font-size: 0.78rem;
-  }
-
-  .viewer-nav-btn {
-    width: 38px;
-    height: 38px;
-    font-size: 1.5rem;
-  }
-
-  .viewer-nav-btn.prev {
-    left: 8px;
-  }
-
-  .viewer-nav-btn.next {
-    right: 8px;
-  }
-
-  #viewer-meta-top {
-    font-size: 0.8rem;
-  }
-
-  #viewer-meta-top .meta-name {
-    max-width: 35vw;
   }
 }

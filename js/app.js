@@ -34,7 +34,7 @@ let filteredPhotos = []; // 当前过滤与排序后的所有照片列表
 let intersectionObserver = null;
 
 // 工具辅助函数
-const APP_VERSION = 'v3.0.1'; // 与 Service Worker 缓存和发布版本保持同步
+const APP_VERSION = 'v3.0.2'; // 与 Service Worker 缓存和发布版本保持同步
 let swRegistration = null;
 let isRefreshing = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1620,56 +1620,24 @@ function renderUploadLogs() {
 function openViewer(photo, photos) {
   currentViewerIndex = photos.indexOf(photo);
   const publicUrl = getPublicImageUrl(photo.key);
-  const formattedDate = format(photo.takenAt || photo.uploadedAt);
-  const formattedSize = formatSize(Number(photo.size));
-  const fullDateTime = formatDateTime(photo.takenAt || photo.uploadedAt);
 
   const dialogHtml = `
     <dialog open id="viewer">
-      <header id="viewer-header">
-        <div class="viewer-header-left">
-          <button id="viewer-info-btn" class="viewer-icon-btn" aria-label="查看信息" title="查看图片元数据 (i)">ℹ️</button>
-          <div id="viewer-info-popover" class="viewer-popover" hidden>
-            <div class="popover-header">
-              <strong>图片详情</strong>
-              <button id="close-info-popover" class="popover-close-btn" aria-label="关闭信息">×</button>
-            </div>
-            <div class="popover-body">
-              <div class="popover-row"><span class="popover-label">文件名：</span><span class="popover-val" id="popover-name">${esc(photo.name)}</span></div>
-              <div class="popover-row"><span class="popover-label">文件大小：</span><span class="popover-val">${photo.size} 字节 (${formattedSize})</span></div>
-              <div class="popover-row"><span class="popover-label">分辨率：</span><span class="popover-val">${photo.dimensions || '未知'}</span></div>
-              <div class="popover-row"><span class="popover-label">拍摄/上传：</span><span class="popover-val">${fullDateTime}</span></div>
-              <div class="popover-row"><span class="popover-label">所属相册：</span><span class="popover-val">${esc(photo.album || '未分类')}</span></div>
-              <div class="popover-row"><span class="popover-label">存储路径：</span><span class="popover-val code">${esc(photo.key)}</span></div>
-              <div class="popover-row"><span class="popover-label">图片外链：</span><span class="popover-val">${publicUrl ? `<a href="${publicUrl}" target="_blank" rel="noopener noreferrer">点击打开</a>` : '未配置'}</span></div>
-            </div>
-          </div>
-        </div>
-        <div id="viewer-meta-top" title="${esc(photo.name)} · ${formattedDate} · ${formattedSize}">
-          <span class="meta-name" id="viewer-meta-name">${esc(photo.name)}</span>
-          <span class="meta-divider">·</span>
-          <span class="meta-date">${formattedDate}</span>
-          <span class="meta-divider">·</span>
-          <span class="meta-size">${formattedSize}</span>
-        </div>
-        <div class="viewer-header-right">
-          <button id="close" aria-label="关闭" title="关闭查看器 (Esc)">×</button>
-        </div>
-      </header>
-
+      <button id="close" aria-label="关闭" title="关闭查看器 (Esc)">×</button>
       <div id="image-stage">
-        <button id="prev" class="viewer-nav-btn prev" aria-label="上一张" title="上一张 (←)">‹</button>
         <img alt="${esc(photo.name)}" title="双击放大 / 还原">
-        <button id="next" class="viewer-nav-btn next" aria-label="下一张" title="下一张 (→)">›</button>
       </div>
-
       <footer>
+        <button id="prev" title="上一张 (←)">‹ 上一张</button>
+        <span id="viewer-meta-text">${esc(photo.name)} · ${formatSize(Number(photo.size))} · ${format(photo.takenAt || photo.uploadedAt)}</span>
         <button id="rename-photo" title="重命名图片">✏️ 重命名</button>
         <button id="move-photo" title="移动到相册">📁 移动</button>
+        <button id="info" title="查看图片元数据">ℹ️ 信息</button>
         ${publicUrl ? '<button id="copy-link" title="复制图片直链">🔗 复制外链</button>' : ''}
         <button id="share" title="系统分享">📤 分享</button>
         <button id="get" title="下载此图片">⬇️ 下载</button>
         <button id="remove" class="danger" title="删除此图片">🗑️ 删除</button>
+        <button id="next" title="下一张 (→)">下一张 ›</button>
       </footer>
     </dialog>
   `;
@@ -1705,83 +1673,28 @@ function openViewer(photo, photos) {
   }
 
   const dialog = document.querySelector('#viewer');
-  const infoBtn = document.querySelector('#viewer-info-btn');
-  const infoPopover = document.querySelector('#viewer-info-popover');
-  const closeInfoBtn = document.querySelector('#close-info-popover');
-
   const switchPhoto = (delta) => {
-    cleanupListeners();
     dialog.remove();
+    document.removeEventListener('keydown', viewerKeyHandler);
     const nextIdx = (currentViewerIndex + delta + photos.length) % photos.length;
     openViewer(photos[nextIdx], photos);
   };
 
   const closeViewer = () => {
-    cleanupListeners();
     dialog.remove();
+    document.removeEventListener('keydown', viewerKeyHandler);
   };
 
   const viewerKeyHandler = (e) => {
-    if (e.key === 'Escape') {
-      if (infoPopover && !infoPopover.hidden) {
-        infoPopover.hidden = true;
-      } else {
-        closeViewer();
-      }
-    } else if (e.key === 'ArrowLeft') {
-      switchPhoto(-1);
-    } else if (e.key === 'ArrowRight') {
-      switchPhoto(1);
-    } else if (e.key.toLowerCase() === 'i') {
-      togglePopover();
-    }
+    if (e.key === 'Escape') closeViewer();
+    if (e.key === 'ArrowLeft') switchPhoto(-1);
+    if (e.key === 'ArrowRight') switchPhoto(1);
   };
-
-  // 点击非对话框/非popover区域关闭信息面板
-  const onDocClick = (e) => {
-    if (!infoPopover || infoPopover.hidden) return;
-    if (!infoPopover.contains(e.target) && e.target !== infoBtn && !infoBtn.contains(e.target)) {
-      infoPopover.hidden = true;
-    }
-  };
-
-  const togglePopover = () => {
-    if (infoPopover) {
-      infoPopover.hidden = !infoPopover.hidden;
-    }
-  };
-
-  const cleanupListeners = () => {
-    document.removeEventListener('keydown', viewerKeyHandler);
-    document.removeEventListener('click', onDocClick, true);
-  };
-
   document.addEventListener('keydown', viewerKeyHandler);
-  document.addEventListener('click', onDocClick, true);
-
-  if (infoBtn) {
-    infoBtn.onclick = (e) => {
-      e.stopPropagation();
-      togglePopover();
-    };
-  }
-
-  if (closeInfoBtn) {
-    closeInfoBtn.onclick = (e) => {
-      e.stopPropagation();
-      if (infoPopover) infoPopover.hidden = true;
-    };
-  }
 
   document.querySelector('#close').onclick = closeViewer;
-  document.querySelector('#prev').onclick = (e) => {
-    e.stopPropagation();
-    switchPhoto(-1);
-  };
-  document.querySelector('#next').onclick = (e) => {
-    e.stopPropagation();
-    switchPhoto(1);
-  };
+  document.querySelector('#prev').onclick = () => switchPhoto(-1);
+  document.querySelector('#next').onclick = () => switchPhoto(1);
   document.querySelector('#get').onclick = () => download(photo);
 
   // 单张图片重命名
@@ -1795,13 +1708,10 @@ function openViewer(photo, photos) {
     photo.name = trimmed;
     await save();
     renderApp();
-
-    const metaNameEl = document.querySelector('#viewer-meta-name');
-    if (metaNameEl) metaNameEl.textContent = trimmed;
-    const popoverNameEl = document.querySelector('#popover-name');
-    if (popoverNameEl) popoverNameEl.textContent = trimmed;
-    if (img) img.alt = trimmed;
-
+    const metaSpan = document.querySelector('#viewer-meta-text');
+    if (metaSpan) {
+      metaSpan.textContent = `${trimmed} · ${formatSize(Number(photo.size))} · ${format(photo.takenAt || photo.uploadedAt)}`;
+    }
     toast(`图片已成功重命名为「${trimmed}」`);
   };
 
@@ -1809,8 +1719,6 @@ function openViewer(photo, photos) {
   document.querySelector('#move-photo').onclick = () => {
     openMoveAlbumDialog([photo.id], (targetAlbum) => {
       photo.album = targetAlbum || '';
-      const popoverAlbumEl = document.querySelector('#viewer-info-popover .popover-val:nth-child(5)');
-      if (popoverAlbumEl) popoverAlbumEl.textContent = targetAlbum || '未分类';
       toast(targetAlbum ? `图片已移入相册「${targetAlbum}」` : '图片已移至未分类');
     });
   };
@@ -1832,6 +1740,19 @@ function openViewer(photo, photos) {
       }
     };
   }
+
+  document.querySelector('#info').onclick = () => {
+    const pubUrl = getPublicImageUrl(photo.key);
+    alert(
+      `文件名：${photo.name}\n` +
+      `大小：${photo.size} 字节 (${formatSize(Number(photo.size))})\n` +
+      `分辨率：${photo.dimensions || '未知'}\n` +
+      `拍摄/上传时间：${formatDateTime(photo.takenAt || photo.uploadedAt)}\n` +
+      `所属相册：${photo.album || '未分类'}\n` +
+      `存储路径：${photo.key}\n` +
+      `图片外链：${pubUrl || '未配置（在设置中填入图片域名即可生成）'}`
+    );
+  };
 
   document.querySelector('#share').onclick = async () => {
     const pubUrl = getPublicImageUrl(photo.key);
