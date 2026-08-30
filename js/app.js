@@ -47,13 +47,14 @@ function bind(items) {
   document.querySelector('#dropzone').ondragover = event => event.preventDefault();
   document.querySelector('#dropzone').ondrop = event => { event.preventDefault(); upload([...event.dataTransfer.files]); };
   document.querySelectorAll('.photo').forEach(card => {
-    let hold; card.onpointerdown = () => hold = setTimeout(() => { selecting = true; selected.add(card.dataset.id); render(); }, 550);
+    let hold, held = false;
+    card.onpointerdown = () => { held = false; hold = setTimeout(() => { held = true; selecting = true; selected.add(card.dataset.id); render(); }, 550); };
     card.onpointerup = () => clearTimeout(hold);
     card.onpointercancel = () => clearTimeout(hold);
-    card.onclick = () => selecting ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), selected.size || (selecting = false), render()) : openViewer(items.find(p => p.id === card.dataset.id), items);
+    card.onclick = () => { if (held) return; selecting ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), selected.size || (selecting = false), render()) : openViewer(items.find(p => p.id === card.dataset.id), items); };
   });
   document.querySelectorAll('[data-action]').forEach(button => button.onclick = () => action(button.dataset.action));
-  document.querySelectorAll('[data-album]').forEach(button => button.onclick = () => { currentAlbum = button.dataset.album; const items = index.photos.filter(p => !p.trashed && (currentAlbum === '全部' || (currentAlbum === '未分类' ? !p.album : p.album === currentAlbum))); document.querySelector('#gallery').innerHTML = gallery(items); document.querySelectorAll('#album-list .album').forEach(b => b.classList.toggle('active', b.dataset.album === currentAlbum)); bind(items); });
+  document.querySelectorAll('[data-album]').forEach(button => button.onclick = () => { currentAlbum = button.dataset.album; selected.clear(); selecting = false; const items = index.photos.filter(p => !p.trashed && (currentAlbum === '全部' || (currentAlbum === '未分类' ? !p.album : p.album === currentAlbum))); document.querySelector('#gallery').innerHTML = gallery(items); document.querySelectorAll('#album-list .album').forEach(b => b.classList.toggle('active', b.dataset.album === currentAlbum)); bind(items); });
   const newAlbum = document.querySelector('#new-album'); if (newAlbum) newAlbum.onclick = () => { const name = prompt('相册名称'); if (name && !index.albums.includes(name)) { index.albums.push(name); save().then(render); } };
 }
 input.onchange = () => upload([...input.files]);
