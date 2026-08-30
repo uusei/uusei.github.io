@@ -1,5 +1,5 @@
 // 静态缓存版本号（应用更新时递增）
-const CACHE = 'cloud-album-shell-v3';
+const CACHE = 'cloud-album-shell-v3.0.2';
 // 预缓存核心资源列表
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/r2.js', './js/index-store.js', './icons/icon.svg', './manifest.webmanifest'];
 
