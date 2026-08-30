@@ -11,6 +11,24 @@ export const config = {
   clear: () => localStorage.removeItem('r2-config'),
   // 获取图片 Base URL
   getImgBaseUrl: () => (localStorage.getItem('IMG_BASE_URL') || '').trim().replace(/\/+$/, ''),
+  // 获取是否开启 Cloudflare Image Resizing 缩略图
+  getCfResizeEnabled: () => localStorage.getItem('CF_RESIZE_ENABLED') === 'true',
+  setCfResizeEnabled: value => {
+    if (value) {
+      localStorage.setItem('CF_RESIZE_ENABLED', 'true');
+    } else {
+      localStorage.removeItem('CF_RESIZE_ENABLED');
+    }
+  },
+  // 获取低性能/减少动效模式配置 (默认跟随系统或关闭)
+  getReduceMotion: () => localStorage.getItem('REDUCE_MOTION') === 'true',
+  setReduceMotion: value => {
+    if (value) {
+      localStorage.setItem('REDUCE_MOTION', 'true');
+    } else {
+      localStorage.removeItem('REDUCE_MOTION');
+    }
+  },
   // 保存或清除图片 Base URL
   setImgBaseUrl: value => {
     const normalized = String(value || '').trim().replace(/\/+$/, '');

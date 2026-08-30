@@ -34,7 +34,7 @@ let filteredPhotos = []; // 当前过滤与排序后的所有照片列表
 let intersectionObserver = null;
 
 // 工具辅助函数
-const APP_VERSION = 'v3.0.2'; // 与 Service Worker 缓存和发布版本保持同步
+const APP_VERSION = 'v3.0.6'; // 与 Service Worker 缓存和发布版本保持同步
 let swRegistration = null;
 let isRefreshing = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -58,6 +58,38 @@ function getPublicImageUrl(key) {
   if (!base || !key) return '';
   const cleanKey = String(key).replace(/^\/+/, '');
   return `${base}/${cleanKey}`;
+}
+
+/**
+ * 获取适用于缩略图的图片 URL
+ * 如果开启了 Cloudflare Image Resizing，则拼接 /cdn-cgi/image/ 参数
+ * 否则返回普通直链
+ * @param {string} key 对象的 key 路径
+ * @param {number} width 缩略图目标宽度（默认 360px）
+ * @returns {string}
+ */
+function getThumbnailUrl(key, width = 360) {
+  const base = config.getImgBaseUrl();
+  if (!base || !key) return '';
+  const cleanKey = String(key).replace(/^\/+/, '');
+  
+  if (config.getCfResizeEnabled()) {
+    // Cloudflare Image Resizing URL 格式: https://域名/cdn-cgi/image/width=360,quality=75,format=auto/key
+    return `${base}/cdn-cgi/image/width=${width},quality=75,format=auto/${cleanKey}`;
+  }
+  return `${base}/${cleanKey}`;
+}
+
+/**
+ * 应用低性能 / 减少动效模式
+ */
+function applyPerformanceMode() {
+  const reduceMotion = config.getReduceMotion();
+  if (reduceMotion) {
+    document.documentElement.classList.add('reduce-motion');
+  } else {
+    document.documentElement.classList.remove('reduce-motion');
+  }
 }
 
 /**
@@ -155,6 +187,7 @@ function setupServiceWorker() {
  * 初始化入口
  */
 async function init() {
+  applyPerformanceMode();
   setupServiceWorker();
   
   const saved = config.get();
@@ -309,10 +342,10 @@ function renderApp() {
           <span>${isSelected ? `已选中 <b>${selected.size}</b> 项` : `共 <b>${filteredPhotos.length}</b> 项`}</span>
         </div>
         <div class="bottom-actions-group">
-          ${view !== 'trash' ? '<button id="btn-bottom-upload" class="bottom-btn bottom-btn-upload">⬆️ 上传</button>' : ''}
-          ${view !== 'trash' ? `<button id="btn-bottom-move-album" class="bottom-btn" ${isSelected ? '' : 'style="display:none;"'}>📁 移至相册</button>` : ''}
-          <button id="btn-bottom-download" class="bottom-btn bottom-btn-download" ${isSelected ? '' : 'disabled'}>⬇️ 下载</button>
-          <button id="btn-bottom-delete" class="bottom-btn bottom-btn-delete ${isSelected ? 'active-lit' : ''}" ${isSelected ? '' : 'disabled'}>🗑️ 删除</button>
+          ${view !== 'trash' ? '<button id="btn-bottom-upload" class="bottom-btn bottom-btn-upload"><span class="btn-icon">⬆️</span><span class="btn-text">上传</span></button>' : ''}
+          ${view !== 'trash' ? `<button id="btn-bottom-move-album" class="bottom-btn" ${isSelected ? '' : 'style="display:none;"'}><span class="btn-icon">📁</span><span class="btn-text">移至相册</span></button>` : ''}
+          <button id="btn-bottom-download" class="bottom-btn bottom-btn-download" ${isSelected ? '' : 'disabled'}><span class="btn-icon">⬇️</span><span class="btn-text">下载</span></button>
+          <button id="btn-bottom-delete" class="bottom-btn bottom-btn-delete ${isSelected ? 'active-lit' : ''}" ${isSelected ? '' : 'disabled'}><span class="btn-icon">🗑️</span><span class="btn-text">删除</span></button>
         </div>
       </div>
     </footer>
@@ -416,18 +449,19 @@ function renderPhotosBatch(reset = false) {
 
 /**
  * 渲染单张照片卡片 HTML
- * 如果配置了图片域名，直接赋 src 并设置 loading="lazy"，体验秒开且不用二次等待
+ * 如果配置了图片域名，直接赋 src 并设置 loading="lazy" 与 decoding="async"，体验秒开且解码不卡顿主线程
  */
 function renderPhotoCard(photo) {
   const isChecked = selected.has(photo.id);
-  const publicUrl = getPublicImageUrl(photo.key);
+  const thumbUrl = getThumbnailUrl(photo.key, 360);
   return `
     <article class="photo-card ${isChecked ? 'selected' : ''}" data-id="${photo.id}">
       <img data-key="${esc(photo.key)}" 
-           ${publicUrl ? `src="${esc(publicUrl)}"` : ''} 
+           ${thumbUrl ? `src="${esc(thumbUrl)}"` : ''} 
            alt="${esc(photo.name)}" 
-           data-loaded="${publicUrl ? 'true' : 'false'}" 
-           loading="lazy">
+           data-loaded="${thumbUrl ? 'true' : 'false'}" 
+           loading="lazy"
+           decoding="async">
       <div class="check-indicator" data-check-id="${photo.id}" title="多选勾选">✓</div>
       <div class="photo-info-bar">
         <span class="photo-title" title="${esc(photo.name)}">${esc(photo.name)}</span>
@@ -439,7 +473,7 @@ function renderPhotoCard(photo) {
 
 /**
  * 懒加载缩略图
- * 优先使用自定义图片域名直链，如未配置或加载失败则回退到 R2 SDK 获取 Blob
+ * 优先使用自定义图片域名（含缩略图参数），如未配置或加载失败则回退到 R2 SDK 获取 Blob
  */
 async function loadLazyThumbnails() {
   const images = document.querySelectorAll('img[data-key]');
@@ -447,11 +481,11 @@ async function loadLazyThumbnails() {
     const key = img.dataset.key;
     if (!key) continue;
 
-    const publicUrl = getPublicImageUrl(key);
+    const thumbUrl = getThumbnailUrl(key, 360);
 
-    if (publicUrl) {
+    if (thumbUrl) {
       // 已经设置并成功加载了直链则跳过
-      if (img.dataset.loaded === 'true' && img.src === publicUrl) continue;
+      if (img.dataset.loaded === 'true' && img.src === thumbUrl) continue;
 
       img.onerror = async () => {
         img.onerror = null;
@@ -467,7 +501,7 @@ async function loadLazyThumbnails() {
       img.onload = () => {
         img.dataset.loaded = 'true';
       };
-      img.src = publicUrl;
+      img.src = thumbUrl;
       continue;
     }
 
@@ -1242,6 +1276,8 @@ async function download(photo) {
  */
 function renderSettings() {
   const currentBaseUrl = config.getImgBaseUrl();
+  const cfResizeEnabled = config.getCfResizeEnabled();
+  const reduceMotion = config.getReduceMotion();
   const sampleKey = index.photos && index.photos[0] ? index.photos[0].key : 'photos/2026/08/sample.jpg';
   const sampleUrl = currentBaseUrl ? `${currentBaseUrl}/${sampleKey}` : '';
 
@@ -1250,6 +1286,38 @@ function renderSettings() {
       <h1>⚙️ 相册设置</h1>
       <p>Cloudflare R2 存储凭据及图片域名仅安全保存在当前浏览器的 localStorage 中。</p>
       
+      <!-- 性能与动效设置卡片 -->
+      <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
+        <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
+          <span>⚡ 移动端性能与显示偏好</span>
+        </h3>
+        <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; line-height: 1.5;">
+          针对低性能手机或海量照片相册，可开启以下优化以消除卡顿并提升滑动帧率。
+        </p>
+
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
+            <input type="checkbox" id="chk-reduce-motion" ${reduceMotion ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
+            <div>
+              <strong>极速省电模式 / 关闭动画</strong>
+              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
+                关闭毛玻璃模糊特效、悬浮缩放动画与全屏查看器过渡，大幅减轻 GPU 负载并解决移动端发热与卡顿。
+              </div>
+            </div>
+          </label>
+
+          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
+            <input type="checkbox" id="chk-cf-resize" ${cfResizeEnabled ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
+            <div>
+              <strong>开启 Cloudflare 实时缩略图裁剪 (Image Resizing)</strong>
+              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
+                列表页自动请求 <code>/cdn-cgi/image/width=360,quality=75,format=auto/</code> 动态压缩 WebP 缩略图（需要你的自定义域名在 Cloudflare 开启了 Image Resizing 或对应 Worker/CDN 规则）。
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <!-- 图片域名 Base URL 配置卡片 -->
       <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
         <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
@@ -1309,6 +1377,25 @@ function renderSettings() {
       </div>
     </section>
   `;
+
+  // 监听动效开关
+  const chkReduceMotion = document.querySelector('#chk-reduce-motion');
+  if (chkReduceMotion) {
+    chkReduceMotion.onchange = () => {
+      config.setReduceMotion(chkReduceMotion.checked);
+      applyPerformanceMode();
+      toast(chkReduceMotion.checked ? '已开启极速省电模式' : '已恢复标准动画效果');
+    };
+  }
+
+  // 监听 Cloudflare 缩略图开关
+  const chkCfResize = document.querySelector('#chk-cf-resize');
+  if (chkCfResize) {
+    chkCfResize.onchange = () => {
+      config.setCfResizeEnabled(chkCfResize.checked);
+      toast(chkCfResize.checked ? '已启用 Cloudflare 缩略图裁剪' : '已关闭 Cloudflare 缩略图裁剪');
+    };
+  }
 
   // 动态输入时更新预览
   const inputBase = document.querySelector('#input-img-base-url');
@@ -1664,12 +1751,12 @@ function openViewer(photo, photos) {
       </div>
 
       <footer>
-        <button id="rename-photo" title="重命名图片">✏️ 重命名</button>
-        <button id="move-photo" title="移动到相册">📁 移动</button>
-        ${publicUrl ? '<button id="copy-link" title="复制图片直链">🔗 复制外链</button>' : ''}
-        <button id="share" title="系统分享">📤 分享</button>
-        <button id="get" title="下载此图片">⬇️ 下载</button>
-        <button id="remove" class="danger" title="删除此图片">🗑️ 删除</button>
+        <button id="rename-photo" title="重命名图片"><span class="btn-icon">✏️</span><span class="btn-text">重命名</span></button>
+        <button id="move-photo" title="移动到相册"><span class="btn-icon">📁</span><span class="btn-text">移动</span></button>
+        ${publicUrl ? '<button id="copy-link" title="复制图片直链"><span class="btn-icon">🔗</span><span class="btn-text">复制外链</span></button>' : ''}
+        <button id="share" title="系统分享"><span class="btn-icon">📤</span><span class="btn-text">分享</span></button>
+        <button id="get" title="下载此图片"><span class="btn-icon">⬇️</span><span class="btn-text">下载</span></button>
+        <button id="remove" class="danger" title="删除此图片"><span class="btn-icon">🗑️</span><span class="btn-text">删除</span></button>
       </footer>
     </dialog>
   `;

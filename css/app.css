@@ -376,6 +376,9 @@ aside.sidebar h3 {
   user-select: none;
   box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   transition: transform 0.15s ease, box-shadow 0.15s ease, outline 0.15s ease;
+  /* 性能优化：离屏内容跳过渲染计算，大幅缓解滚动掉帧 */
+  content-visibility: auto;
+  contain-intrinsic-size: 160px;
 }
 
 .photo-card:hover {
@@ -590,6 +593,11 @@ aside.sidebar h3 {
   font-weight: 500;
   border-radius: 8px;
   min-width: 80px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .bottom-btn-upload {
@@ -1613,12 +1621,42 @@ dialog#viewer {
 
   .bottom-selection-info {
     font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .bottom-actions-group {
+    gap: 6px;
   }
 
   .bottom-btn {
-    padding: 0.45rem 0.7rem;
+    padding: 0.45rem 0.5rem;
     font-size: 0.8rem;
-    min-width: 60px;
+    min-width: unset;
+    flex-shrink: 0;
+  }
+
+  /* 移动端屏幕空间紧凑时隐藏 emoji 图标，防止文字换行并确保居中 */
+  .bottom-btn .btn-icon {
+    display: none;
+  }
+
+  #viewer footer .btn-icon {
+    display: none;
+  }
+
+  /* 移动端查看器顶部文件名居中，空间不足时隐去日期和大小 */
+  #viewer-meta-top {
+    min-width: 0;
+  }
+
+  #viewer-meta-top .meta-name {
+    max-width: 65vw;
+  }
+
+  #viewer-meta-top .meta-divider,
+  #viewer-meta-top .meta-date,
+  #viewer-meta-top .meta-size {
+    display: none;
   }
 
   .setup {
@@ -1631,11 +1669,81 @@ dialog#viewer {
 
   #viewer footer {
     gap: 6px;
-    padding: 8px;
-    font-size: 0.75rem;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    font-size: 0.8rem;
+    justify-content: center;
   }
 
   #viewer footer button {
-    padding: 0.4rem 0.6rem;
+    padding: 0.45rem 0.6rem;
+    min-width: unset;
+    white-space: nowrap;
   }
+
+  /* 移动端去除昂贵的 backdrop-filter 模糊，改用不透明或普通半透明，极大节省 GPU 计算 */
+  .check-indicator {
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.65);
+  }
+
+  dialog#viewer {
+    backdrop-filter: none;
+    background: #05070c;
+  }
+
+  #viewer-header {
+    backdrop-filter: none;
+    background: #0f172a;
+  }
+
+  .viewer-nav-btn {
+    backdrop-filter: none;
+    background: rgba(15, 23, 42, 0.85);
+  }
+
+  #viewer footer {
+    backdrop-filter: none;
+    background: #0f172a;
+  }
+
+  .viewer-popover {
+    backdrop-filter: none;
+    background: #0f172a;
+  }
+
+  .modal-overlay {
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.75);
+  }
+
+  .floating-top-btn {
+    backdrop-filter: none;
+  }
+}
+
+/* ================= 极速省电模式 / 减少动效 (Reduce Motion) ================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.reduce-motion .photo-card:hover {
+  transform: none !important;
+}
+
+html.reduce-motion .viewer-nav-btn:hover {
+  transform: translateY(-50%) !important;
 }
