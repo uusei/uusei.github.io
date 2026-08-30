@@ -3,8 +3,7 @@ import { config, loadIndex, saveIndex } from './index-store.js';
 import { clearUploadLogs, createUploadLog, finishUploadLog, listUploadLogs } from './upload-log.js';
 
 const app = document.querySelector('#app'), input = document.querySelector('#file-input');
-let r2, index, view = 'timeline', selected = new Set(), current = null, currentAlbum = '全部';
-const coarse = matchMedia('(pointer: coarse)').matches;
+let r2, index, view = 'timeline', selected = new Set(), current = null, currentAlbum = '全部', selecting = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const format = value => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value));
 const formatDateTime = value => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '-';
@@ -43,15 +42,15 @@ function bind(items) {
   const fab = document.querySelector('#fab'); if (fab) fab.onclick = () => input.click();
   document.querySelector('#upload-logs').onclick = () => renderUploadLogs();
   document.querySelector('#settings').onclick = () => renderSettings();
-  ['timeline', 'albums', 'trash'].forEach(id => document.querySelector(`#${id}`).onclick = () => { view = id; selected.clear(); render(); });
+  ['timeline', 'albums', 'trash'].forEach(id => document.querySelector(`#${id}`).onclick = () => { view = id; selected.clear(); selecting = false; render(); });
   document.querySelector('#search').oninput = event => document.querySelectorAll('.photo').forEach(card => card.hidden = !card.textContent.toLowerCase().includes(event.target.value.toLowerCase()));
   document.querySelector('#dropzone').ondragover = event => event.preventDefault();
   document.querySelector('#dropzone').ondrop = event => { event.preventDefault(); upload([...event.dataTransfer.files]); };
   document.querySelectorAll('.photo').forEach(card => {
-    let hold; card.onpointerdown = () => hold = setTimeout(() => { selected.add(card.dataset.id); render(); }, 550);
+    let hold; card.onpointerdown = () => hold = setTimeout(() => { selecting = true; selected.add(card.dataset.id); render(); }, 550);
     card.onpointerup = () => clearTimeout(hold);
     card.onpointercancel = () => clearTimeout(hold);
-    card.onclick = () => (selected.size || coarse) ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), render()) : openViewer(items.find(p => p.id === card.dataset.id), items);
+    card.onclick = () => selecting ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), selected.size || (selecting = false), render()) : openViewer(items.find(p => p.id === card.dataset.id), items);
   });
   document.querySelectorAll('[data-action]').forEach(button => button.onclick = () => action(button.dataset.action));
   document.querySelectorAll('[data-album]').forEach(button => button.onclick = () => { currentAlbum = button.dataset.album; const items = index.photos.filter(p => !p.trashed && (currentAlbum === '全部' || (currentAlbum === '未分类' ? !p.album : p.album === currentAlbum))); document.querySelector('#gallery').innerHTML = gallery(items); document.querySelectorAll('#album-list .album').forEach(b => b.classList.toggle('active', b.dataset.album === currentAlbum)); bind(items); });
@@ -74,12 +73,12 @@ async function upload(files) {
 async function save() { await saveIndex(r2, index); }
 async function action(name) {
   const photos = index.photos.filter(p => selected.has(p.id));
-  if (name === 'cancel') { selected.clear(); return render(); }
+  if (name === 'cancel') { selected.clear(); selecting = false; return render(); }
   if (name === 'album') { const album = prompt(`输入相册名称（已有：${index.albums.join('、')}）`); if (!album) return; if (!index.albums.includes(album)) index.albums.push(album); photos.forEach(p => p.album = album); }
   if (name === 'download') return Promise.all(photos.map(download));
-  if (name === 'delete') { if (!confirm(`将 ${photos.length} 张照片移入回收站？`)) { selected.clear(); return render(); } for (const p of photos) { const trash = p.key.replace(/^photos\//, 'trash/'); await r2.copy(p.key, trash); await r2.delete(p.key); p.key = trash; p.trashed = true; p.deletedAt = new Date().toISOString(); } }
+  if (name === 'delete') { if (!confirm(`将 ${photos.length} 张照片移入回收站？`)) { selected.clear(); selecting = false; return render(); } for (const p of photos) { const trash = p.key.replace(/^photos\//, 'trash/'); await r2.copy(p.key, trash); await r2.delete(p.key); p.key = trash; p.trashed = true; p.deletedAt = new Date().toISOString(); } }
   if (name === 'empty') { if (!confirm('确定彻底删除回收站中的所有照片？此操作无法撤销。')) return; for (const p of index.photos.filter(p => p.trashed)) await r2.delete(p.key); index.photos = index.photos.filter(p => !p.trashed); }
-  selected.clear(); await save(); render();
+  selected.clear(); selecting = false; await save(); render();
 }
 async function download(photo) { const blob = await (await r2.get(photo.key)).blob(); const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: photo.name }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
 function renderSettings() { app.innerHTML = `<section class="setup"><h1>设置</h1><p>R2 凭据只保存在本浏览器 localStorage。</p><button id="edit">修改凭据</button><button id="clear" class="danger">清除本机凭据</button><button id="back">返回相册</button></section>`; document.querySelector('#edit').onclick = () => renderSetup(config.get()); document.querySelector('#clear').onclick = () => { if (confirm('确定清除本机保存的 R2 凭据？')) { config.clear(); renderSetup(); } }; document.querySelector('#back').onclick = render; }
