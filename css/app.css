@@ -603,10 +603,96 @@ aside.sidebar h3 {
   box-shadow: 0 4px 14px rgba(0,0,0,0.2);
   transition: opacity 0.2s ease;
   pointer-events: none;
+  display: none;
+  opacity: 0;
 }
 
 #toast.error {
   background: var(--danger);
+}
+
+/* ================= Service Worker 更新通知横幅 ================= */
+.update-banner {
+  position: fixed;
+  top: calc(16px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e293b;
+  color: #f8fafc;
+  border: 1px solid #3b82f6;
+  border-radius: 12px;
+  padding: 12px 18px;
+  z-index: 1000;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(92vw, 560px);
+  width: max-content;
+  animation: slideDownBanner 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.update-banner[hidden] {
+  display: none !important;
+}
+
+.update-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.update-banner-icon {
+  font-size: 1.2rem;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.update-banner-actions .btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.update-banner-actions .btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.update-banner-actions .btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.update-banner-actions .btn-secondary {
+  background: #334155;
+  color: #cbd5e1;
+}
+
+.update-banner-actions .btn-secondary:hover {
+  background: #475569;
+  color: #ffffff;
+}
+
+@keyframes slideDownBanner {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* ================= 设置与日志视图 ================= */
