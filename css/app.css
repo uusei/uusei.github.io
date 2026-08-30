@@ -288,6 +288,7 @@ aside.sidebar h3 {
   gap: 4px;
 }
 
+.album-nav-item .btn-edit-album,
 .album-nav-item .btn-delete-album {
   background: transparent;
   border: none;
@@ -300,8 +301,14 @@ aside.sidebar h3 {
   transition: opacity 0.2s, color 0.2s, background 0.2s;
 }
 
+.album-nav-item:hover .btn-edit-album,
 .album-nav-item:hover .btn-delete-album {
   opacity: 1;
+}
+
+.album-nav-item .btn-edit-album:hover {
+  color: var(--brand);
+  background: #eff6ff;
 }
 
 .album-nav-item .btn-delete-album:hover {
@@ -1025,65 +1032,189 @@ aside.sidebar h3 {
   background: var(--brand-hover);
 }
 
+/* ================= 移动相册选择弹窗 ================= */
+.move-album-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 14px 0;
+  padding-right: 4px;
+}
+
+.move-album-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.9rem;
+}
+
+.move-album-option:hover {
+  border-color: var(--brand);
+  background: #f0f7ff;
+}
+
+.move-album-option.selected {
+  border-color: var(--brand);
+  background: #eff6ff;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.move-album-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.move-album-create input {
+  flex: 1;
+}
+
 /* ================= 全屏图片查看器 ================= */
 dialog#viewer {
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
   margin: 0;
   border: 0;
-  background: #05070c;
+  background: rgba(5, 7, 12, 0.92);
+  backdrop-filter: blur(12px);
   color: #fff;
   padding: 0;
   display: grid;
   grid-template-rows: 1fr auto;
-  z-index: 100;
+  z-index: 9999;
+  animation: viewerFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes viewerFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 #image-stage {
   overflow: hidden;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   touch-action: none;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
 #image-stage img {
-  max-width: 100%;
-  max-height: 100%;
-  transition: transform 0.2s ease;
+  max-width: 95vw;
+  max-height: calc(100vh - 120px);
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: viewerImgZoomIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+@keyframes viewerImgZoomIn {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 #viewer footer {
-  padding: 12px 16px;
+  padding: 12px 20px;
   display: flex;
   justify-content: center;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  background: rgba(17, 24, 39, 0.85);
-  backdrop-filter: blur(8px);
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 10;
+}
+
+#viewer footer button {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+#viewer footer button:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+#viewer footer button.danger {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+#viewer footer button.danger:hover {
+  background: rgba(239, 68, 68, 0.4);
 }
 
 #viewer footer span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  flex: 1 1 200px;
   text-align: center;
   font-size: 0.85rem;
+  color: #cbd5e1;
 }
 
 #close {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 10;
-  font-size: 1.5rem;
-  background: rgba(0, 0, 0, 0.5);
+  top: 20px;
+  right: 20px;
+  z-index: 20;
+  font-size: 1.6rem;
+  background: rgba(0, 0, 0, 0.55);
   color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 50%;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+}
+
+#close:hover {
+  background: rgba(239, 68, 68, 0.8);
+  transform: scale(1.08);
 }
 
 /* ================= 深色模式适配 ================= */
@@ -1114,6 +1245,30 @@ dialog#viewer {
   
   .photo-card {
     background: #1e293b;
+  }
+
+  .move-album-option {
+    background: #1e293b;
+    border-color: #334155;
+  }
+
+  .move-album-option:hover {
+    background: #334155;
+  }
+
+  .move-album-option.selected {
+    background: #1e3a8a;
+    color: #93c5fd;
+  }
+
+  .album-nav-item .btn-edit-album:hover {
+    background: #334155;
+    color: #93c5fd;
+  }
+
+  .album-nav-item .btn-delete-album:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
   }
 
   /* 深色模式下的弹窗微调 */

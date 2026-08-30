@@ -34,6 +34,9 @@ let filteredPhotos = []; // 当前过滤与排序后的所有照片列表
 let intersectionObserver = null;
 
 // 工具辅助函数
+const APP_VERSION = 'v3.0.1'; // 与 Service Worker 缓存和发布版本保持同步
+let swRegistration = null;
+let isRefreshing = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const format = value => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value));
 const formatDateTime = value => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '-';
@@ -83,12 +86,76 @@ async function copyToClipboard(text) {
 }
 
 /**
+ * Service Worker 更新与通知机制
+ */
+function triggerSwUpdate(worker) {
+  if (worker) {
+    worker.postMessage({ type: 'SKIP_WAITING' });
+  }
+}
+
+function showUpdateBanner(worker) {
+  const banner = document.querySelector('#update-banner');
+  const btnNow = document.querySelector('#btn-update-now');
+  const btnDismiss = document.querySelector('#btn-update-dismiss');
+  if (!banner) return;
+
+  banner.hidden = false;
+  if (btnNow) {
+    btnNow.onclick = () => {
+      btnNow.disabled = true;
+      btnNow.textContent = '正在更新...';
+      triggerSwUpdate(worker);
+    };
+  }
+  if (btnDismiss) {
+    btnDismiss.onclick = () => {
+      banner.hidden = true;
+    };
+  }
+}
+
+function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  // 监听 controllerchange：当新 worker 激活接管后，页面自动刷新
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!isRefreshing) {
+      isRefreshing = true;
+      window.location.reload();
+    }
+  });
+
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    swRegistration = reg;
+
+    // 如果注册时就已经有 waiting 状态的新 worker
+    if (reg.waiting) {
+      showUpdateBanner(reg.waiting);
+    }
+
+    // 监听是否有新的 Service Worker 正在安装
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (!newWorker) return;
+
+      newWorker.addEventListener('statechange', () => {
+        // 如果安装完成且当前页面已有激活的 SW 控制（说明是更新而非初次安装）
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          showUpdateBanner(newWorker);
+        }
+      });
+    });
+  }).catch(err => {
+    console.warn('[SW] 注册失败:', err);
+  });
+}
+
+/**
  * 初始化入口
  */
 async function init() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  }
+  setupServiceWorker();
   
   const saved = config.get();
   if (!saved) {
@@ -223,6 +290,7 @@ function renderApp() {
             <span>📁 ${esc(albumName)}</span>
             <div class="album-right">
               <span class="badge">${count}</span>
+              <span class="btn-edit-album" data-edit-album="${esc(albumName)}" title="重命名相册">✏️</span>
               <span class="btn-delete-album" data-delete-album="${esc(albumName)}" title="删除相册">🗑️</span>
             </div>
           </button>
@@ -232,7 +300,7 @@ function renderApp() {
     </aside>
   ` : '';
 
-  // 底部固定操作条 (上传、下载、删除)
+  // 底部固定操作条 (上传、移动、下载、删除)
   const isSelected = selected.size > 0;
   const bottomBarHtml = `
     <footer class="bottom-action-bar">
@@ -242,7 +310,7 @@ function renderApp() {
         </div>
         <div class="bottom-actions-group">
           ${view !== 'trash' ? '<button id="btn-bottom-upload" class="bottom-btn bottom-btn-upload">⬆️ 上传</button>' : ''}
-          ${view === 'albums' && isSelected ? '<button id="btn-bottom-move-album" class="bottom-btn">📁 移入相册</button>' : ''}
+          ${view !== 'trash' && isSelected ? '<button id="btn-bottom-move-album" class="bottom-btn">📁 移至相册</button>' : ''}
           <button id="btn-bottom-download" class="bottom-btn bottom-btn-download" ${isSelected ? '' : 'disabled'}>⬇️ 下载</button>
           <button id="btn-bottom-delete" class="bottom-btn bottom-btn-delete ${isSelected ? 'active-lit' : ''}" ${isSelected ? '' : 'disabled'}>🗑️ 删除</button>
         </div>
@@ -518,11 +586,54 @@ function bindEvents() {
   // 相册侧边栏切换
   document.querySelectorAll('.album-nav-item[data-album]').forEach(btn => {
     btn.onclick = (e) => {
-      // 如果点击的是删除相册按钮，则不触发相册切换
-      if (e.target.closest('[data-delete-album]')) return;
+      // 如果点击的是删除或重命名相册按钮，则不触发相册切换
+      if (e.target.closest('[data-delete-album]') || e.target.closest('[data-edit-album]')) return;
       currentAlbum = btn.dataset.album;
       selected.clear();
       renderApp();
+    };
+  });
+
+  // 重命名相册
+  document.querySelectorAll('[data-edit-album]').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const oldName = btn.dataset.editAlbum;
+      if (!oldName) return;
+
+      const newName = prompt(`请输入相册「${oldName}」的新名称：`, oldName);
+      if (!newName) return;
+      const trimmed = newName.trim();
+      if (!trimmed || trimmed === oldName) return;
+
+      if ((index.albums || []).includes(trimmed)) {
+        alert(`已存在名为「${trimmed}」的相册，请更换名称`);
+        return;
+      }
+
+      try {
+        // 更新相册列表
+        index.albums = (index.albums || []).map(a => a === oldName ? trimmed : a);
+
+        // 批量更新属于该相册的照片
+        index.photos.forEach(p => {
+          if (p.album === oldName) {
+            p.album = trimmed;
+          }
+        });
+
+        // 若当前选中的正是该相册，保持选中更新后的相册
+        if (currentAlbum === oldName) {
+          currentAlbum = trimmed;
+        }
+
+        await save();
+        renderApp();
+        toast(`相册「${oldName}」已成功重命名为「${trimmed}」`);
+      } catch (err) {
+        console.error('重命名相册失败:', err);
+        alert(`重命名相册失败: ${err.message}`);
+      }
     };
   });
 
@@ -588,6 +699,12 @@ function bindEvents() {
   const bottomUploadBtn = document.querySelector('#btn-bottom-upload');
   if (bottomUploadBtn) {
     bottomUploadBtn.onclick = () => input.click();
+  }
+
+  // 底部移动相册按钮
+  const bottomMoveBtn = document.querySelector('#btn-bottom-move-album');
+  if (bottomMoveBtn) {
+    bottomMoveBtn.onclick = () => openMoveAlbumDialog([...selected]);
   }
 
   // 底部下载按钮
@@ -723,14 +840,177 @@ function updateBottomBarState() {
 }
 
 /**
- * 批量下载选中的图片
+ * 纯原生微型 Zip 打包生成器（零外部依赖，避免批量下载被浏览器判定为多文件弹窗拦截）
+ */
+function createZipBlob(files) {
+  // files: Array<{ name: string, data: Uint8Array }>
+  const fileRecords = [];
+  let offset = 0;
+
+  // CRC-32 查找表与计算
+  const crcTable = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    crcTable[i] = c;
+  }
+  const calcCRC32 = (buf) => {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+      crc = (crc >>> 8) ^ crcTable[(crc ^ buf[i]) & 0xFF];
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  };
+
+  const textEncoder = new TextEncoder();
+  const chunks = [];
+
+  for (const file of files) {
+    const filenameBytes = textEncoder.encode(file.name);
+    const dataBytes = file.data;
+    const crc = calcCRC32(dataBytes);
+    const size = dataBytes.length;
+
+    // Local file header (30 bytes + name length)
+    const localHeader = new Uint8Array(30 + filenameBytes.length);
+    const view = new DataView(localHeader.buffer);
+    view.setUint32(0, 0x04034b50, true); // Local file header signature
+    view.setUint16(4, 10, true);         // Version needed
+    view.setUint16(6, 0x0800, true);     // General purpose bit flag (UTF-8)
+    view.setUint16(8, 0, true);          // Compression method (0 = Store)
+    view.setUint16(10, 0, true);         // Mod time
+    view.setUint16(12, 0, true);         // Mod date
+    view.setUint32(14, crc, true);       // CRC-32
+    view.setUint32(18, size, true);      // Compressed size
+    view.setUint32(22, size, true);      // Uncompressed size
+    view.setUint16(26, filenameBytes.length, true); // File name length
+    view.setUint16(28, 0, true);         // Extra field length
+    localHeader.set(filenameBytes, 30);
+
+    chunks.push(localHeader);
+    chunks.push(dataBytes);
+
+    fileRecords.push({
+      nameBytes: filenameBytes,
+      size,
+      crc,
+      offset
+    });
+
+    offset += localHeader.length + dataBytes.length;
+  }
+
+  const centralDirStart = offset;
+  let centralDirSize = 0;
+
+  // Central directory records
+  for (const rec of fileRecords) {
+    const cdRecord = new Uint8Array(46 + rec.nameBytes.length);
+    const view = new DataView(cdRecord.buffer);
+    view.setUint32(0, 0x02014b50, true); // Central file header signature
+    view.setUint16(4, 20, true);         // Version made by
+    view.setUint16(6, 10, true);         // Version needed
+    view.setUint16(8, 0x0800, true);     // Flags (UTF-8)
+    view.setUint16(10, 0, true);        // Compression (Store)
+    view.setUint16(12, 0, true);        // Mod time
+    view.setUint16(14, 0, true);        // Mod date
+    view.setUint32(16, rec.crc, true);  // CRC-32
+    view.setUint32(20, rec.size, true); // Compressed size
+    view.setUint32(24, rec.size, true); // Uncompressed size
+    view.setUint16(28, rec.nameBytes.length, true); // File name length
+    view.setUint16(30, 0, true);        // Extra field length
+    view.setUint16(32, 0, true);        // File comment length
+    view.setUint16(34, 0, true);        // Disk number start
+    view.setUint16(36, 0, true);        // Internal file attributes
+    view.setUint32(38, 0, true);        // External file attributes
+    view.setUint32(42, rec.offset, true);// Relative offset of local header
+    cdRecord.set(rec.nameBytes, 46);
+
+    chunks.push(cdRecord);
+    centralDirSize += cdRecord.length;
+  }
+
+  // End of central directory record (22 bytes)
+  const eocd = new Uint8Array(22);
+  const eocdView = new DataView(eocd.buffer);
+  eocdView.setUint32(0, 0x06054b50, true); // EOCD signature
+  eocdView.setUint16(4, 0, true);          // Disk number
+  eocdView.setUint16(6, 0, true);          // Disk with CD
+  eocdView.setUint16(8, fileRecords.length, true);  // Disk entries
+  eocdView.setUint16(10, fileRecords.length, true); // Total entries
+  eocdView.setUint32(12, centralDirSize, true);    // Central dir size
+  eocdView.setUint32(16, centralDirStart, true);   // Central dir offset
+  eocdView.setUint16(20, 0, true);         // Comment length
+
+  chunks.push(eocd);
+
+  return new Blob(chunks, { type: 'application/zip' });
+}
+
+/**
+ * 批量下载选中的图片（单张直接下载，多张在前端零依赖打包为 .zip 单文件下载，彻底解决浏览器拦截）
  */
 async function batchDownload() {
   if (!selected.size) return;
   const photos = filteredPhotos.filter(p => selected.has(p.id));
-  toast(`正在准备下载 ${photos.length} 张照片…`);
-  for (const photo of photos) {
-    await download(photo);
+  
+  if (photos.length === 1) {
+    await download(photos[0]);
+    return;
+  }
+
+  toast(`正在打包下载 ${photos.length} 张照片…`);
+  try {
+    const fileEntries = [];
+    const usedNames = new Map();
+
+    for (let i = 0; i < photos.length; i++) {
+      const p = photos[i];
+      const res = await r2.get(p.key);
+      const ab = await res.arrayBuffer();
+      
+      // 文件名防重名处理
+      let filename = p.name || `photo_${i + 1}.jpg`;
+      if (usedNames.has(filename)) {
+        const count = usedNames.get(filename) + 1;
+        usedNames.set(filename, count);
+        const extIdx = filename.lastIndexOf('.');
+        if (extIdx > 0) {
+          filename = `${filename.slice(0, extIdx)} (${count})${filename.slice(extIdx)}`;
+        } else {
+          filename = `${filename} (${count})`;
+        }
+      } else {
+        usedNames.set(filename, 0);
+      }
+
+      fileEntries.push({
+        name: filename,
+        data: new Uint8Array(ab)
+      });
+    }
+
+    const zipBlob = createZipBlob(fileEntries);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const zipName = `photos_${dateStr}_${photos.length}files.zip`;
+
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(zipBlob),
+      download: zipName
+    });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+
+    toast(`已成功打包并开始下载「${zipName}」🎉`);
+  } catch (err) {
+    console.error('批量下载失败:', err);
+    toast(`批量下载失败：${err.message}`, true);
   }
 }
 
@@ -766,26 +1046,101 @@ async function batchDelete() {
 }
 
 /**
+ * 移动图片到相册弹窗对话框（支持单张与批量移动、新建相册、移至未分类）
+ */
+function openMoveAlbumDialog(photoIds, onSuccess) {
+  if (!photoIds || !photoIds.length) return;
+  const count = photoIds.length;
+  const albums = index.albums || [];
+
+  const modalHtml = `
+    <div id="move-album-modal" class="modal-overlay" role="dialog" aria-modal="true">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>📁 移动 ${count} 张照片到相册</h3>
+          <button class="modal-close" aria-label="关闭">×</button>
+        </div>
+        <p style="margin: 6px 0 10px; font-size: 0.85rem; color: var(--muted);">请选择目标相册或新建相册：</p>
+        <div class="move-album-list">
+          <div class="move-album-option" data-target-album="">
+            <span>📄 移出相册 (设为未分类)</span>
+          </div>
+          ${albums.map(a => `
+            <div class="move-album-option" data-target-album="${esc(a)}">
+              <span>📁 ${esc(a)}</span>
+              <span class="badge" style="font-size:0.75rem; color:var(--muted);">${index.photos.filter(p => !p.trashed && p.album === a).length} 张</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="move-album-create">
+          <input id="modal-new-album-input" type="text" placeholder="或者输入新建相册名..." />
+          <button id="modal-create-and-move" class="btn" style="white-space:nowrap; background:var(--brand); color:#fff;">新建并移动</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  const modal = document.querySelector('#move-album-modal');
+
+  const closeModal = () => modal.remove();
+  modal.querySelector('.modal-close').onclick = closeModal;
+  modal.onclick = (e) => {
+    if (e.target === modal) closeModal();
+  };
+
+  const applyMove = async (targetAlbumName) => {
+    closeModal();
+    const photos = index.photos.filter(p => photoIds.includes(p.id));
+    photos.forEach(p => {
+      if (targetAlbumName) {
+        p.album = targetAlbumName;
+      } else {
+        delete p.album;
+      }
+    });
+
+    selected.clear();
+    await save();
+    renderApp();
+    const label = targetAlbumName ? `相册「${targetAlbumName}」` : '「未分类」';
+    toast(`已将 ${count} 张照片移动至 ${label}`);
+    if (onSuccess) onSuccess(targetAlbumName);
+  };
+
+  // 点击选择已有相册或未分类
+  modal.querySelectorAll('.move-album-option').forEach(opt => {
+    opt.onclick = () => {
+      const target = opt.dataset.targetAlbum;
+      applyMove(target);
+    };
+  });
+
+  // 新建相册并移动
+  const newAlbumInput = modal.querySelector('#modal-new-album-input');
+  const createBtn = modal.querySelector('#modal-create-and-move');
+  const handleCreateMove = () => {
+    const name = newAlbumInput.value.trim();
+    if (!name) return;
+    index.albums = index.albums || [];
+    if (!index.albums.includes(name)) {
+      index.albums.push(name);
+    }
+    applyMove(name);
+  };
+
+  createBtn.onclick = handleCreateMove;
+  newAlbumInput.onkeydown = (e) => {
+    if (e.key === 'Enter') handleCreateMove();
+  };
+}
+
+/**
  * 批量移动到相册
  */
 async function batchMoveAlbum() {
   if (!selected.size) return;
-  const albums = index.albums || [];
-  const albumName = prompt(`请输入相册名称（现有相册：${albums.join('、') || '暂无'}）`);
-  if (!albumName) return;
-  
-  const trimmed = albumName.trim();
-  if (trimmed && !albums.includes(trimmed)) {
-    index.albums.push(trimmed);
-  }
-
-  const photos = index.photos.filter(p => selected.has(p.id));
-  photos.forEach(p => p.album = trimmed);
-
-  selected.clear();
-  await save();
-  renderApp();
-  toast(`已将选中照片移动至相册「${trimmed}」`);
+  openMoveAlbumDialog([...selected]);
 }
 
 /**
@@ -926,6 +1281,24 @@ function renderSettings() {
             ` : ''}
           </div>
         </form>
+      </div>
+
+      <!-- 应用版本与更新卡片 -->
+      <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
+        <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
+          <span>🚀 应用版本与更新</span>
+          <span id="app-ver-badge" style="font-size: 0.8rem; font-weight: normal; padding: 2px 8px; border-radius: 6px; background: rgba(37, 99, 235, 0.12); color: var(--brand);">
+            ${APP_VERSION}
+          </span>
+        </h3>
+        <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; line-height: 1.5;">
+          离线缓存已开启。当远端更新 UI 或功能时，可点击下方按钮即时检查并同步最新版本。
+          <span id="update-status-detail" style="display: block; margin-top: 4px; font-size: 0.82rem; color: var(--brand);"></span>
+        </p>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button type="button" id="btn-check-update" class="primary" style="flex: 1; min-width: 130px; padding: 10px 12px; font-size: 0.9rem;">🔍 检查更新</button>
+          <button type="button" id="btn-force-reload" style="flex: 1; min-width: 130px; padding: 10px 12px; font-size: 0.9rem; background: var(--card-bg, #f1f5f9); border: 1px solid var(--line); color: var(--text);">🔄 清除缓存并刷新</button>
+        </div>
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
@@ -1249,24 +1622,30 @@ function openViewer(photo, photos) {
 
   const dialogHtml = `
     <dialog open id="viewer">
-      <button id="close" aria-label="关闭">×</button>
+      <button id="close" aria-label="关闭" title="关闭查看器 (Esc)">×</button>
       <div id="image-stage">
-        <img alt="${esc(photo.name)}">
+        <img alt="${esc(photo.name)}" title="双击放大 / 还原">
       </div>
       <footer>
-        <button id="prev" title="上一张">‹</button>
-        <span>${esc(photo.name)} · ${formatSize(Number(photo.size))} · ${format(photo.takenAt || photo.uploadedAt)}</span>
-        <button id="info">信息</button>
-        ${publicUrl ? '<button id="copy-link" title="复制图片直链">复制外链</button>' : ''}
-        <button id="share">分享</button>
-        <button id="get">下载</button>
-        <button id="remove" class="danger">删除</button>
-        <button id="next" title="下一张">›</button>
+        <button id="prev" title="上一张 (←)">‹ 上一张</button>
+        <span id="viewer-meta-text">${esc(photo.name)} · ${formatSize(Number(photo.size))} · ${format(photo.takenAt || photo.uploadedAt)}</span>
+        <button id="rename-photo" title="重命名图片">✏️ 重命名</button>
+        <button id="move-photo" title="移动到相册">📁 移动</button>
+        <button id="info" title="查看图片元数据">ℹ️ 信息</button>
+        ${publicUrl ? '<button id="copy-link" title="复制图片直链">🔗 复制外链</button>' : ''}
+        <button id="share" title="系统分享">📤 分享</button>
+        <button id="get" title="下载此图片">⬇️ 下载</button>
+        <button id="remove" class="danger" title="删除此图片">🗑️ 删除</button>
+        <button id="next" title="下一张 (→)">下一张 ›</button>
       </footer>
     </dialog>
   `;
 
-  app.insertAdjacentHTML('beforeend', dialogHtml);
+  // 如果已经有残留的 viewer 则先清理
+  const oldDialog = document.querySelector('#viewer');
+  if (oldDialog) oldDialog.remove();
+
+  document.body.insertAdjacentHTML('beforeend', dialogHtml);
 
   const img = document.querySelector('#image-stage img');
 
@@ -1295,14 +1674,53 @@ function openViewer(photo, photos) {
   const dialog = document.querySelector('#viewer');
   const switchPhoto = (delta) => {
     dialog.remove();
+    document.removeEventListener('keydown', viewerKeyHandler);
     const nextIdx = (currentViewerIndex + delta + photos.length) % photos.length;
     openViewer(photos[nextIdx], photos);
   };
 
-  document.querySelector('#close').onclick = () => dialog.remove();
+  const closeViewer = () => {
+    dialog.remove();
+    document.removeEventListener('keydown', viewerKeyHandler);
+  };
+
+  const viewerKeyHandler = (e) => {
+    if (e.key === 'Escape') closeViewer();
+    if (e.key === 'ArrowLeft') switchPhoto(-1);
+    if (e.key === 'ArrowRight') switchPhoto(1);
+  };
+  document.addEventListener('keydown', viewerKeyHandler);
+
+  document.querySelector('#close').onclick = closeViewer;
   document.querySelector('#prev').onclick = () => switchPhoto(-1);
   document.querySelector('#next').onclick = () => switchPhoto(1);
   document.querySelector('#get').onclick = () => download(photo);
+
+  // 单张图片重命名
+  document.querySelector('#rename-photo').onclick = async () => {
+    const currentName = photo.name;
+    const newName = prompt('请输入新文件名（包含扩展名）：', currentName);
+    if (!newName) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === currentName) return;
+
+    photo.name = trimmed;
+    await save();
+    renderApp();
+    const metaSpan = document.querySelector('#viewer-meta-text');
+    if (metaSpan) {
+      metaSpan.textContent = `${trimmed} · ${formatSize(Number(photo.size))} · ${format(photo.takenAt || photo.uploadedAt)}`;
+    }
+    toast(`图片已成功重命名为「${trimmed}」`);
+  };
+
+  // 单张图片移动相册
+  document.querySelector('#move-photo').onclick = () => {
+    openMoveAlbumDialog([photo.id], (targetAlbum) => {
+      photo.album = targetAlbum || '';
+      toast(targetAlbum ? `图片已移入相册「${targetAlbum}」` : '图片已移至未分类');
+    });
+  };
 
   // 复制直链按钮
   const copyLinkBtn = document.querySelector('#copy-link');
@@ -1370,7 +1788,7 @@ function openViewer(photo, photos) {
 
   document.querySelector('#remove').onclick = async () => {
     selected = new Set([photo.id]);
-    dialog.remove();
+    closeViewer();
     await batchDelete();
   };
 
