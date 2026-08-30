@@ -3,7 +3,8 @@ import { config, loadIndex, saveIndex } from './index-store.js';
 import { clearUploadLogs, createUploadLog, finishUploadLog, listUploadLogs } from './upload-log.js';
 
 const app = document.querySelector('#app'), input = document.querySelector('#file-input');
-let r2, index, view = 'timeline', selected = new Set(), current = null;
+let r2, index, view = 'timeline', selected = new Set(), current = null, currentAlbum = '全部';
+const coarse = matchMedia('(pointer: coarse)').matches;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const format = value => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value));
 const formatDateTime = value => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '-';
@@ -28,17 +29,18 @@ function renderSetup(saved = {}) {
 }
 function render() {
   const items = index.photos.filter(photo => view === 'trash' ? photo.trashed : !photo.trashed);
-  app.innerHTML = `<header><strong>云端相册</strong><input id="search" type="search" placeholder="搜索文件名或标签"><button id="timeline">时间线</button><button id="albums">相册</button><button id="trash">回收站</button><button id="upload-logs">上传日志</button><button id="upload" class="primary">上传</button><button id="settings" aria-label="设置">⚙</button></header><section id="dropzone" class="content"><aside id="album-list">${albumLinks()}</aside><div id="toolbar">${selected.size ? `<span>已选 ${selected.size} 张</span><button data-action="album">移入相册</button><button data-action="download">下载</button><button data-action="delete">删除</button><button data-action="cancel">取消</button>` : view === 'trash' ? '<button data-action="empty">清空回收站</button>' : ''}</div><div id="gallery">${gallery(items)}</div></section><div id="toast" role="status"></div>`;
+  const tabs = [['timeline', '时间线'], ['albums', '相册'], ['trash', '回收站'], ['upload-logs', '上传日志']].map(([id, label]) => `<button id="${id}" class="tab ${view === id ? 'active' : ''}">${label}</button>`).join('');
+  app.innerHTML = `<header><div class="header-row"><strong>云端相册</strong><span class="spacer"></span><button id="settings" aria-label="设置">⚙</button></div><input id="search" type="search" placeholder="搜索文件名或标签"><nav class="tabs">${tabs}</nav></header><section id="dropzone" class="content"><aside id="album-list">${albumLinks()}</aside><div id="toolbar">${view === 'trash' ? '<button data-action="empty">清空回收站</button>' : ''}</div><div id="gallery">${gallery(items)}</div></section>${view !== 'trash' ? '<button id="fab" aria-label="上传照片">＋</button>' : ''}${selected.size ? `<div id="selection-bar"><span>已选 ${selected.size} 张</span><button data-action="download" class="primary">下载</button><button data-action="album">移入相册</button><button data-action="delete" class="danger">删除</button><button data-action="cancel">取消</button></div>` : ''}<div id="toast" role="status"></div>`;
   bind(items); loadPreviews();
 }
-function albumLinks() { if (view !== 'albums') return ''; const albums = ['全部', '未分类', ...(index.albums || [])]; return `<h2>相册</h2>${albums.map(a => `<button class="album" data-album="${esc(a)}">${esc(a)}</button>`).join('')}<button id="new-album">＋ 新建相册</button>`; }
+function albumLinks() { if (view !== 'albums') return ''; const albums = ['全部', '未分类', ...(index.albums || [])]; return `${albums.map(a => `<button class="album ${a === currentAlbum ? 'active' : ''}" data-album="${esc(a)}">${esc(a)}</button>`).join('')}<button id="new-album">＋ 新建相册</button>`; }
 function gallery(items) {
   const grouped = view === 'timeline' ? items.reduce((groups, item) => { const day = format(item.takenAt || item.uploadedAt); (groups[day] ||= []).push(item); return groups; }, {}) : { '': items };
-  return Object.entries(grouped).map(([day, photos]) => `<section class="day">${day ? `<h2>${day}</h2>` : ''}<div class="grid">${photos.map(photo => `<article class="photo ${selected.has(photo.id) ? 'selected' : ''}" data-id="${photo.id}"><img loading="lazy" data-key="${esc(photo.key)}" alt="${esc(photo.name)}"><span>${esc(photo.name)}</span></article>`).join('')}</div></section>`).join('') || '<p class="empty">这里还没有照片。点击“上传”开始吧。</p>';
+  return Object.entries(grouped).map(([day, photos]) => `<section class="day">${day ? `<h2>${day}</h2>` : ''}<div class="grid">${photos.map(photo => `<article class="photo ${selected.has(photo.id) ? 'selected' : ''}" data-id="${photo.id}"><img loading="lazy" data-key="${esc(photo.key)}" alt="${esc(photo.name)}"><i class="check">✓</i><span>${esc(photo.name)}</span></article>`).join('')}</div></section>`).join('') || '<p class="empty">这里还没有照片。点右下角“＋”上传吧。</p>';
 }
 async function loadPreviews() { for (const image of document.querySelectorAll('img[data-key]')) { try { image.src = URL.createObjectURL(await (await r2.get(image.dataset.key)).blob()); } catch { image.alt = '预览加载失败'; } } }
 function bind(items) {
-  document.querySelector('#upload').onclick = () => input.click();
+  const fab = document.querySelector('#fab'); if (fab) fab.onclick = () => input.click();
   document.querySelector('#upload-logs').onclick = () => renderUploadLogs();
   document.querySelector('#settings').onclick = () => renderSettings();
   ['timeline', 'albums', 'trash'].forEach(id => document.querySelector(`#${id}`).onclick = () => { view = id; selected.clear(); render(); });
@@ -48,10 +50,11 @@ function bind(items) {
   document.querySelectorAll('.photo').forEach(card => {
     let hold; card.onpointerdown = () => hold = setTimeout(() => { selected.add(card.dataset.id); render(); }, 550);
     card.onpointerup = () => clearTimeout(hold);
-    card.onclick = () => selected.size ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), render()) : openViewer(items.find(p => p.id === card.dataset.id), items);
+    card.onpointercancel = () => clearTimeout(hold);
+    card.onclick = () => (selected.size || coarse) ? (selected.has(card.dataset.id) ? selected.delete(card.dataset.id) : selected.add(card.dataset.id), render()) : openViewer(items.find(p => p.id === card.dataset.id), items);
   });
   document.querySelectorAll('[data-action]').forEach(button => button.onclick = () => action(button.dataset.action));
-  document.querySelectorAll('[data-album]').forEach(button => button.onclick = () => { const album = button.dataset.album; const items = index.photos.filter(p => !p.trashed && (album === '全部' || (album === '未分类' ? !p.album : p.album === album))); document.querySelector('#gallery').innerHTML = gallery(items); bind(items); });
+  document.querySelectorAll('[data-album]').forEach(button => button.onclick = () => { currentAlbum = button.dataset.album; const items = index.photos.filter(p => !p.trashed && (currentAlbum === '全部' || (currentAlbum === '未分类' ? !p.album : p.album === currentAlbum))); document.querySelector('#gallery').innerHTML = gallery(items); document.querySelectorAll('#album-list .album').forEach(b => b.classList.toggle('active', b.dataset.album === currentAlbum)); bind(items); });
   const newAlbum = document.querySelector('#new-album'); if (newAlbum) newAlbum.onclick = () => { const name = prompt('相册名称'); if (name && !index.albums.includes(name)) { index.albums.push(name); save().then(render); } };
 }
 input.onchange = () => upload([...input.files]);
@@ -102,6 +105,6 @@ function openViewer(photo, photos) {
 }
 function gesture(stage, left, right) { let start, scale = 1; stage.onpointerdown = e => { start = e.clientX; stage.setPointerCapture(e.pointerId); }; stage.onpointerup = e => { if (Math.abs(e.clientX - start) > 60) e.clientX < start ? right() : left(); }; stage.ondblclick = () => { scale = scale === 1 ? 2 : 1; stage.querySelector('img').style.transform = `scale(${scale})`; }; }
 async function imageDimensions(file) { try { const bitmap = await createImageBitmap(file); return `${bitmap.width} × ${bitmap.height}`; } catch { return ''; } }
-async function receiveShared() { if (!location.search.includes('share-target')) return; const cached = await caches.open('cloud-album-shell-v1').then(c => c.match('./shared-files')); if (!cached) return; const files = await cached.json(); await caches.open('cloud-album-shell-v1').then(c => c.delete('./shared-files')); await upload(files.map(f => new File([new Uint8Array(f.data)], f.name, { type: f.type }))); history.replaceState(null, '', './'); }
+async function receiveShared() { if (!location.search.includes('share-target')) return; const cached = await caches.open('cloud-album-shell-v2').then(c => c.match('./shared-files')); if (!cached) return; const files = await cached.json(); await caches.open('cloud-album-shell-v2').then(c => c.delete('./shared-files')); await upload(files.map(f => new File([new Uint8Array(f.data)], f.name, { type: f.type }))); history.replaceState(null, '', './'); }
 function toast(message, error = false) { const node = document.querySelector('#toast'); if (node) { node.textContent = message; node.className = error ? 'error' : ''; } else console[error ? 'error' : 'log'](message); }
 init();

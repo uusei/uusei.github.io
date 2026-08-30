@@ -1,4 +1,4 @@
-const CACHE = 'cloud-album-shell-v1';
+const CACHE = 'cloud-album-shell-v2';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/r2.js', './js/index-store.js', './icons/icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
