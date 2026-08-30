@@ -4,14 +4,18 @@ const hmac = async (key, value) => crypto.subtle.sign('HMAC', await crypto.subtl
 const hex = bytes => [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
 const xml = (text, tag) => [...new DOMParser().parseFromString(text, 'application/xml').getElementsByTagName(tag)].map(n => n.textContent);
 
+// RFC 3986 规范 URI 编码（转义 !'()* 字符，确保符合 S3 / R2 规范）
+const encodeRfc3986 = str => encodeURIComponent(str).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
 export class R2 {
   constructor(config) { this.config = config; this.endpoint = `https://${config.accountId}.r2.cloudflarestorage.com`; }
+
   async request(method, key = '', { query = {}, body, headers = {}, onProgress } = {}) {
     const { accessKeyId, secretAccessKey, bucket } = this.config;
     const now = new Date(), stamp = now.toISOString().replace(/[:-]|\.\d{3}/g, ''), date = stamp.slice(0, 8);
-    const path = `/${bucket}${key ? `/${key.split('/').map(encodeURIComponent).join('/')}` : ''}`;
+    const path = `/${bucket}${key ? `/${key.split('/').map(encodeRfc3986).join('/')}` : ''}`;
     const params = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => [k, v]));
-    const canonicalQuery = [...params].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+    const canonicalQuery = [...params].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${encodeRfc3986(k)}=${encodeRfc3986(v)}`).join('&');
     const payload = body ? (body instanceof Blob ? await body.arrayBuffer() : body) : new ArrayBuffer(0);
     const payloadHash = await hash(payload);
     const allHeaders = { host: new URL(this.endpoint).host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': stamp, ...headers };
@@ -24,15 +28,35 @@ export class R2 {
     for (const part of ['auto', 's3', 'aws4_request']) signingKey = await hmac(signingKey, part);
     allHeaders.Authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders.join(';')}, Signature=${hex(await hmac(signingKey, stringToSign))}`;
     const url = `${this.endpoint}${path}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
-    const response = await fetch(url, { method, headers: allHeaders, body: body ? (onProgress ? progressBody(body, onProgress) : body) : undefined, ...(onProgress ? { duplex: 'half' } : {}) });
+
+    let response;
+    // 若带有进度监听且为 Blob，优先尝试流式上传；若环境不支持（如移动端 Safari/WebView 报 TypeError），优雅回退到普通上传
+    if (body && onProgress && (typeof Blob !== 'undefined' && body instanceof Blob)) {
+      try {
+        response = await fetch(url, {
+          method,
+          headers: allHeaders,
+          body: progressBody(body, onProgress),
+          duplex: 'half'
+        });
+      } catch (err) {
+        // 移动端或部分浏览器不支持 ReadableStream request body，回退至原生 body 重发
+        response = await fetch(url, { method, headers: allHeaders, body });
+        if (typeof body.size === 'number') onProgress(body.size, body.size);
+      }
+    } else {
+      response = await fetch(url, { method, headers: allHeaders, body: body || undefined });
+    }
+
     if (!response.ok) throw new Error(`${response.status}：${await response.text() || response.statusText}`);
     return response;
   }
+
   async list(prefix = '', token) { const r = await this.request('GET', '', { query: { 'list-type': '2', prefix, 'continuation-token': token } }); const text = await r.text(); return { keys: xml(text, 'Key'), token: xml(text, 'NextContinuationToken')[0] }; }
   get(key) { return this.request('GET', key); }
   put(key, file, onProgress) { return this.request('PUT', key, { body: file, headers: { 'content-type': file.type || 'application/octet-stream' }, onProgress }); }
   delete(key) { return this.request('DELETE', key); }
-  copy(from, to) { return this.request('PUT', to, { headers: { 'x-amz-copy-source': `/${this.config.bucket}/${from.split('/').map(encodeURIComponent).join('/')}` } }); }
+  copy(from, to) { return this.request('PUT', to, { headers: { 'x-amz-copy-source': `/${this.config.bucket}/${from.split('/').map(encodeRfc3986).join('/')}` } }); }
 }
 function progressBody(blob, callback) {
   let sent = 0;

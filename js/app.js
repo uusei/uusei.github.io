@@ -221,7 +221,10 @@ function renderApp() {
         return `
           <button class="album-nav-item ${currentAlbum === albumName ? 'active' : ''}" data-album="${esc(albumName)}">
             <span>📁 ${esc(albumName)}</span>
-            <span class="badge">${count}</span>
+            <div class="album-right">
+              <span class="badge">${count}</span>
+              <span class="btn-delete-album" data-delete-album="${esc(albumName)}" title="删除相册">🗑️</span>
+            </div>
           </button>
         `;
       }).join('')}
@@ -513,11 +516,53 @@ function bindEvents() {
   }
 
   // 相册侧边栏切换
-  document.querySelectorAll('[data-album]').forEach(btn => {
-    btn.onclick = () => {
+  document.querySelectorAll('.album-nav-item[data-album]').forEach(btn => {
+    btn.onclick = (e) => {
+      // 如果点击的是删除相册按钮，则不触发相册切换
+      if (e.target.closest('[data-delete-album]')) return;
       currentAlbum = btn.dataset.album;
       selected.clear();
       renderApp();
+    };
+  });
+
+  // 删除相册
+  document.querySelectorAll('[data-delete-album]').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const albumToDelete = btn.dataset.deleteAlbum;
+      if (!albumToDelete) return;
+
+      const count = index.photos.filter(p => !p.trashed && p.album === albumToDelete).length;
+      const confirmMsg = count > 0
+        ? `确定要删除相册「${albumToDelete}」吗？\n该相册内共有 ${count} 张照片，删除后照片将变为「未分类」（不会删除照片本身）。`
+        : `确定要删除相册「${albumToDelete}」吗？`;
+
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        // 从相册列表中移除
+        index.albums = (index.albums || []).filter(a => a !== albumToDelete);
+
+        // 将该相册下的所有照片设置为未分类 (album = null)
+        index.photos.forEach(p => {
+          if (p.album === albumToDelete) {
+            delete p.album;
+          }
+        });
+
+        // 如果当前选中的正是被删除的相册，重置为全部或未分类
+        if (currentAlbum === albumToDelete) {
+          currentAlbum = '全部';
+        }
+
+        // 保存索引并刷新
+        await save();
+        renderApp();
+      } catch (err) {
+        console.error('删除相册失败:', err);
+        alert('删除相册失败，请重试');
+      }
     };
   });
 

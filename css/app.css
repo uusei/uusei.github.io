@@ -282,6 +282,33 @@ aside.sidebar h3 {
   border-radius: 10px;
 }
 
+.album-nav-item .album-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.album-nav-item .btn-delete-album {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s, background 0.2s;
+}
+
+.album-nav-item:hover .btn-delete-album {
+  opacity: 1;
+}
+
+.album-nav-item .btn-delete-album:hover {
+  color: var(--danger);
+  background: #fee2e2;
+}
+
 .btn-new-album {
   margin-top: 8px;
   width: 100%;
