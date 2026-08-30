@@ -34,7 +34,7 @@ let filteredPhotos = []; // 当前过滤与排序后的所有照片列表
 let intersectionObserver = null;
 
 // 工具辅助函数
-const APP_VERSION = 'v3.0.6'; // 与 Service Worker 缓存和发布版本保持同步
+const APP_VERSION = 'v3.0.7'; // 与 Service Worker 缓存和发布版本保持同步
 let swRegistration = null;
 let isRefreshing = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -62,7 +62,7 @@ function getPublicImageUrl(key) {
 
 /**
  * 获取适用于缩略图的图片 URL
- * 如果开启了 Cloudflare Image Resizing，则拼接 /cdn-cgi/image/ 参数
+ * 如果开启了缩略图裁剪，则拼接 /thumb/width=360,quality=75,format=auto/ 参数
  * 否则返回普通直链
  * @param {string} key 对象的 key 路径
  * @param {number} width 缩略图目标宽度（默认 360px）
@@ -74,8 +74,8 @@ function getThumbnailUrl(key, width = 360) {
   const cleanKey = String(key).replace(/^\/+/, '');
   
   if (config.getCfResizeEnabled()) {
-    // Cloudflare Image Resizing URL 格式: https://域名/cdn-cgi/image/width=360,quality=75,format=auto/key
-    return `${base}/cdn-cgi/image/width=${width},quality=75,format=auto/${cleanKey}`;
+    // 采用自定义 Worker 路径 /thumb/，规避 Cloudflare /cdn-cgi/ 保留路径拦截
+    return `${base}/thumb/width=${width},quality=75,format=auto/${cleanKey}`;
   }
   return `${base}/${cleanKey}`;
 }
