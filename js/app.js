@@ -1872,29 +1872,177 @@ function openViewer(photo, photos) {
     await batchDelete();
   };
 
-  gesture(document.querySelector('#image-stage'), () => switchPhoto(-1), () => switchPhoto(1));
+  initViewerZoomAndPan(document.querySelector('#image-stage'), () => switchPhoto(-1), () => switchPhoto(1));
 }
 
 /**
- * 手势滑动与双击缩放支持
+ * 图片平移拖拽、鼠标滚轮缩放、移动端双指捏合缩放及轻扫切图支持
  */
-function gesture(stage, left, right) {
+function initViewerZoomAndPan(stage, onPrev, onNext) {
   if (!stage) return;
-  let startX, scale = 1;
-  stage.onpointerdown = e => {
-    startX = e.clientX;
-    stage.setPointerCapture(e.pointerId);
+  const img = stage.querySelector('img');
+  if (!img) return;
+
+  let scale = 1;
+  let translateX = 0;
+  let translateY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+  let initialTranslateX = 0;
+  let initialTranslateY = 0;
+  let activePointers = new Map();
+  let initialPinchDistance = 0;
+  let initialPinchScale = 1;
+
+  const minScale = 0.5;
+  const maxScale = 5;
+
+  const updateTransform = (smooth = false) => {
+    img.style.transition = smooth ? 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)' : 'none';
+    img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    img.style.cursor = scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
   };
-  stage.onpointerup = e => {
-    if (Math.abs(e.clientX - startX) > 60) {
-      e.clientX < startX ? right() : left();
+
+  const resetZoom = (smooth = true) => {
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform(smooth);
+  };
+
+  // 鼠标滚轮缩放 (以鼠标位置或中心为锚点)
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+    const newScale = Math.min(Math.max(scale * zoomFactor, minScale), maxScale);
+
+    if (newScale === scale) return;
+
+    if (newScale <= 1) {
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+    } else {
+      const rect = stage.getBoundingClientRect();
+      const mouseX = e.clientX - (rect.left + rect.width / 2);
+      const mouseY = e.clientY - (rect.top + rect.height / 2);
+
+      // 缩放中心平移微调
+      translateX -= (mouseX - translateX) * (zoomFactor - 1);
+      translateY -= (mouseY - translateY) * (zoomFactor - 1);
+      scale = newScale;
+    }
+    updateTransform(false);
+  }, { passive: false });
+
+  // 双击快速放大/复原
+  stage.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    if (scale > 1.2) {
+      resetZoom(true);
+    } else {
+      scale = 2.5;
+      const rect = stage.getBoundingClientRect();
+      const mouseX = e.clientX - (rect.left + rect.width / 2);
+      const mouseY = e.clientY - (rect.top + rect.height / 2);
+      translateX = -mouseX * 0.8;
+      translateY = -mouseY * 0.8;
+      updateTransform(true);
+    }
+  });
+
+  // 指针按下（鼠标/单指触摸/多指触摸）
+  stage.addEventListener('pointerdown', (e) => {
+    // 忽略左右导航按钮上的点击事件
+    if (e.target.closest('.viewer-nav-btn')) return;
+
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    stage.setPointerCapture(e.pointerId);
+
+    if (activePointers.size === 1) {
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      initialTranslateX = translateX;
+      initialTranslateY = translateY;
+      img.style.transition = 'none';
+    } else if (activePointers.size === 2) {
+      // 双指捏合开始
+      isDragging = false;
+      const pts = Array.from(activePointers.values());
+      initialPinchDistance = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      initialPinchScale = scale;
+    }
+  });
+
+  // 指针移动
+  stage.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size === 1 && isDragging) {
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      if (scale > 1) {
+        // 放大模式：自由拖动画布
+        translateX = initialTranslateX + deltaX;
+        translateY = initialTranslateY + deltaY;
+        updateTransform(false);
+      }
+    } else if (activePointers.size === 2) {
+      // 双指捏合缩放
+      const pts = Array.from(activePointers.values());
+      const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (initialPinchDistance > 0) {
+        const factor = currentDist / initialPinchDistance;
+        scale = Math.min(Math.max(initialPinchScale * factor, minScale), maxScale);
+        updateTransform(false);
+      }
+    }
+  });
+
+  // 指针抬起或取消
+  const onPointerEnd = (e) => {
+    if (activePointers.has(e.pointerId)) {
+      const startPt = { x: startX, y: startY };
+      const endPt = { x: e.clientX, y: e.clientY };
+      const deltaX = endPt.x - startPt.x;
+      const deltaY = endPt.y - startPt.y;
+
+      activePointers.delete(e.pointerId);
+
+      // 如果未放大（scale <= 1），单指水平滑动超出阈值触发切图
+      if (scale <= 1 && Math.abs(deltaX) > 60 && Math.abs(deltaY) < 100) {
+        if (deltaX < 0) {
+          onNext?.();
+        } else {
+          onPrev?.();
+        }
+      }
+
+      // 如果缩放比例小于 1，松手后自动回弹恢复到 1
+      if (scale < 1) {
+        resetZoom(true);
+      }
+    }
+
+    if (activePointers.size === 0) {
+      isDragging = false;
+      img.style.cursor = scale > 1 ? 'grab' : 'default';
     }
   };
-  stage.ondblclick = () => {
-    scale = scale === 1 ? 2 : 1;
-    const img = stage.querySelector('img');
-    if (img) img.style.transform = `scale(${scale})`;
-  };
+
+  stage.addEventListener('pointerup', onPointerEnd);
+  stage.addEventListener('pointercancel', onPointerEnd);
+}
+
+/**
+ * 手势滑动与双击缩放支持 (向下兼容保留)
+ */
+function gesture(stage, left, right) {
+  initViewerZoomAndPan(stage, left, right);
 }
 
 /**
