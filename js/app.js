@@ -941,6 +941,146 @@ function renderSettings() {
 }
 
 /**
+ * 显示测试连接失败弹窗与排查指南
+ * @param {Error|object} error 捕获到的错误对象
+ * @param {object} inputValues 用户在表单填写的凭据（用于检查空格或格式）
+ */
+function showConnectionErrorModal(error, inputValues = {}) {
+  // 先移除可能存在的旧弹窗
+  const oldModal = document.querySelector('#connection-error-modal');
+  if (oldModal) oldModal.remove();
+
+  const errorMessage = error?.message || String(error || '未知错误');
+  const errorStack = error?.stack || '无调用栈信息';
+
+  // 凭据格式检查（是否有前后空格等常见问题）
+  const spaceWarnings = [];
+  if (inputValues.accountId && inputValues.accountId !== inputValues.accountId.trim()) {
+    spaceWarnings.push('Account ID 包含首尾多余空格');
+  }
+  if (inputValues.accessKeyId && inputValues.accessKeyId !== inputValues.accessKeyId.trim()) {
+    spaceWarnings.push('Access Key ID 包含首尾多余空格');
+  }
+  if (inputValues.secretAccessKey && inputValues.secretAccessKey !== inputValues.secretAccessKey.trim()) {
+    spaceWarnings.push('Secret Access Key 包含首尾多余空格');
+  }
+  if (inputValues.bucket && inputValues.bucket !== inputValues.bucket.trim()) {
+    spaceWarnings.push('Bucket 名称包含首尾多余空格');
+  }
+
+  // 整理供用户一键复制的完整错误诊断文本
+  const copyDetails = [
+    `=== 云端相册连接测试诊断报告 ===`,
+    `时间: ${new Date().toLocaleString()}`,
+    `当前网址 (Origin): ${window.location.origin}`,
+    `存储桶 (Bucket): ${inputValues.bucket || '未填'}`,
+    `Account ID: ${inputValues.accountId ? inputValues.accountId.substring(0, 6) + '***' : '未填'}`,
+    `Access Key ID: ${inputValues.accessKeyId ? inputValues.accessKeyId.substring(0, 6) + '***' : '未填'}`,
+    `错误简述: ${errorMessage}`,
+    spaceWarnings.length ? `格式预警: ${spaceWarnings.join('；')}` : null,
+    `\n--- 详细错误信息 ---`,
+    errorStack
+  ].filter(Boolean).join('\n');
+
+  const modalHtml = `
+    <div id="connection-error-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-error-title">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div class="modal-title" id="modal-error-title">
+            <span>⚠️</span>
+            <span>连接测试失败</span>
+          </div>
+          <button type="button" class="modal-close-icon" id="btn-modal-x" title="关闭" aria-label="关闭">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="error-summary-box">
+            ${esc(errorMessage)}
+          </div>
+
+          ${spaceWarnings.length ? `
+            <div class="error-summary-box" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3); color: #d97706;">
+              ⚠️ <strong>输入格式注意：</strong>${esc(spaceWarnings.join('，'))}，请仔细检查复制粘贴时是否多选了空格。
+            </div>
+          ` : ''}
+
+          <div class="troubleshoot-guide">
+            <h4>💡 常见原因与排查指南</h4>
+            <ol class="troubleshoot-list">
+              <li>
+                <strong>CORS 跨域策略未配置或域名不匹配</strong>
+                <p>在 Cloudflare R2 存储桶设置中的 <strong>CORS 策略</strong> 必须允许当前网页源 <code class="troubleshoot-code">${esc(window.location.origin)}</code>，且包含 <code class="troubleshoot-code">GET, PUT, DELETE, HEAD</code> 请求方法。</p>
+              </li>
+              <li>
+                <strong>R2 API 令牌权限不足</strong>
+                <p>创建 API 令牌时必须选择 <strong>对象读和写 (Object Read & Write)</strong> 权限，并且该令牌必须授权访问当前填写的存储桶。</p>
+              </li>
+              <li>
+                <strong>凭据拼写与多余空格</strong>
+                <p>请确保 <strong>Account ID</strong>（通常为32位十六进制字符串）、<strong>Access Key ID</strong> 与 <strong>Secret Access Key</strong> 完整正确，检查首尾无空格或换行符。</p>
+              </li>
+              <li>
+                <strong>客户端 IP 白名单限制</strong>
+                <p>如果在 Cloudflare 创建 API 令牌时启用了 <strong>客户端 IP 过滤 (Client IP Address Filtering)</strong>，请确保当前网络 IP 已在允许范围内，或暂时移除 IP 限制。</p>
+              </li>
+              <li>
+                <strong>系统时钟偏差过大</strong>
+                <p>AWS S3 / SigV4 协议对请求时间有效性有严格要求（通常不超过15分钟），若本机系统时区或系统时间不准确，会导致签名校验失败。</p>
+              </li>
+            </ol>
+          </div>
+
+          <details class="error-details-collapsible">
+            <summary>查看详细错误信息 (Stack Trace)</summary>
+            <pre>${esc(errorStack)}</pre>
+          </details>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="modal-btn modal-btn-copy" id="btn-modal-copy">📋 复制错误详情</button>
+          <button type="button" class="modal-btn modal-btn-close" id="btn-modal-confirm">我知道了</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  const modal = document.querySelector('#connection-error-modal');
+  const closeModal = () => {
+    modal.remove();
+    document.removeEventListener('keydown', escListener);
+  };
+
+  const escListener = (e) => {
+    if (e.key === 'Escape') closeModal();
+  };
+  document.addEventListener('keydown', escListener);
+
+  // 点击遮罩外部关闭
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  // 点击关闭按钮与确认按钮
+  document.querySelector('#btn-modal-x').onclick = closeModal;
+  document.querySelector('#btn-modal-confirm').onclick = closeModal;
+
+  // 复制错误详情
+  const copyBtn = document.querySelector('#btn-modal-copy');
+  copyBtn.onclick = async () => {
+    const success = await copyToClipboard(copyDetails);
+    if (success) {
+      copyBtn.textContent = '✅ 已复制到剪贴板';
+      toast('错误详情已复制');
+      setTimeout(() => {
+        if (copyBtn) copyBtn.textContent = '📋 复制错误详情';
+      }, 2000);
+    } else {
+      toast('复制失败，请手动选择复制', true);
+    }
+  };
+}
+
+/**
  * 初始化配置与凭据设置表单
  */
 function renderSetup(saved = {}) {
@@ -977,11 +1117,19 @@ function renderSetup(saved = {}) {
     event.preventDefault();
     const formData = new FormData(event.target);
     const imgBaseUrl = formData.get('imgBaseUrl');
+    const rawValues = {
+      accountId: formData.get('accountId') || '',
+      accessKeyId: formData.get('accessKeyId') || '',
+      secretAccessKey: formData.get('secretAccessKey') || '',
+      bucket: formData.get('bucket') || ''
+    };
+
+    // 自动去除输入项的前后空白字符以提高容错
     const values = {
-      accountId: formData.get('accountId'),
-      accessKeyId: formData.get('accessKeyId'),
-      secretAccessKey: formData.get('secretAccessKey'),
-      bucket: formData.get('bucket')
+      accountId: rawValues.accountId.trim(),
+      accessKeyId: rawValues.accessKeyId.trim(),
+      secretAccessKey: rawValues.secretAccessKey.trim(),
+      bucket: rawValues.bucket.trim()
     };
 
     const submitBtn = event.target.querySelector('button');
@@ -997,7 +1145,10 @@ function renderSetup(saved = {}) {
       index = await loadIndex(r2);
       renderApp();
     } catch (error) {
+      console.error('测试连接失败:', error);
       toast(`连接失败：${error.message}`, true);
+      // 弹出详细排查弹窗，传入错误对象与用户原始输入
+      showConnectionErrorModal(error, rawValues);
       submitBtn.disabled = false;
       submitBtn.textContent = '测试连接并保存';
     }
