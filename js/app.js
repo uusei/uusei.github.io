@@ -1753,8 +1753,8 @@ function openViewer(photo, photos) {
       <footer>
         <button id="rename-photo" title="重命名图片"><span class="btn-icon">✏️</span><span class="btn-text">重命名</span></button>
         <button id="move-photo" title="移动到相册"><span class="btn-icon">📁</span><span class="btn-text">移动</span></button>
-        ${publicUrl ? '<button id="copy-link" title="复制图片直链"><span class="btn-icon">🔗</span><span class="btn-text">复制外链</span></button>' : ''}
-        <button id="share" title="系统分享"><span class="btn-icon">📤</span><span class="btn-text">分享</span></button>
+        <button id="crop-photo" title="矩形裁切图片"><span class="btn-icon">✂️</span><span class="btn-text">裁切</span></button>
+        <button id="share" title="分享图片"><span class="btn-icon">📤</span><span class="btn-text">分享</span></button>
         <button id="get" title="下载此图片"><span class="btn-icon">⬇️</span><span class="btn-text">下载</span></button>
         <button id="remove" class="danger" title="删除此图片"><span class="btn-icon">🗑️</span><span class="btn-text">删除</span></button>
       </footer>
@@ -1902,56 +1902,52 @@ function openViewer(photo, photos) {
     });
   };
 
-  // 复制直链按钮
-  const copyLinkBtn = document.querySelector('#copy-link');
-  if (copyLinkBtn) {
-    copyLinkBtn.onclick = async () => {
-      const url = getPublicImageUrl(photo.key);
-      if (!url) {
-        toast('请先在相册设置中配置图片域名 Base URL', true);
+  document.querySelector('#share').onclick = async () => {
+    try {
+      toast('正在准备分享文件…');
+      const res = await r2.get(photo.key);
+      const blob = await res.blob();
+      const file = new File([blob], photo.name, { type: blob.type || 'image/jpeg' });
+
+      // 优先尝试以图片文件形式发起系统分享（QQ、微信等应用接收图片消息）
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: photo.name
+        });
         return;
       }
-      const ok = await copyToClipboard(url);
-      if (ok) {
-        toast('已复制图片直链到剪贴板 📋');
-      } else {
-        prompt('图片直链如下，可手动复制：', url);
-      }
-    };
-  }
 
-  document.querySelector('#share').onclick = async () => {
-    const pubUrl = getPublicImageUrl(photo.key);
-    // 如果配置了图片外链且系统支持 URL 分享
-    if (pubUrl && navigator.share) {
-      try {
+      // 如果浏览器不支持文件分享，但配置了直链且支持URL分享
+      const pubUrl = getPublicImageUrl(photo.key);
+      if (pubUrl && navigator.share) {
         await navigator.share({
           title: photo.name,
           text: `${photo.name} - 云端相册`,
           url: pubUrl
         });
         return;
-      } catch (e) {
-        if (e.name === 'AbortError') return;
       }
-    }
 
-    // 默认尝试原生文件分享
-    try {
-      const blob = await (await r2.get(photo.key)).blob();
-      const file = new File([blob], photo.name, { type: blob.type });
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ title: photo.name, files: [file] });
-      } else if (pubUrl) {
+      // 降级复制链接或提示
+      if (pubUrl) {
         const ok = await copyToClipboard(pubUrl);
-        toast(ok ? '已复制图片链接到剪贴板' : '已生成外链');
+        toast(ok ? '当前环境不支持直接分享图片，已复制图片链接' : '当前环境不支持文件分享');
       } else {
-        toast('当前浏览器环境不支持文件原生分享。', true);
+        toast('当前浏览器或系统不支持原生图片分享', true);
       }
     } catch (e) {
       if (e.name !== 'AbortError') toast(`分享失败：${e.message}`, true);
     }
   };
+
+  // 矩形裁切按钮
+  const cropBtn = document.querySelector('#crop-photo');
+  if (cropBtn) {
+    cropBtn.onclick = () => {
+      openCropModal(photo);
+    };
+  }
 
   document.querySelector('#remove').onclick = async () => {
     selected = new Set([photo.id]);
@@ -2123,6 +2119,369 @@ function initViewerZoomAndPan(stage, onPrev, onNext) {
 
   stage.addEventListener('pointerup', onPointerEnd);
   stage.addEventListener('pointercancel', onPointerEnd);
+}
+
+/**
+ * 矩形裁切模态框及操作
+ */
+async function openCropModal(photo) {
+  toast('正在加载图片…');
+  let imageBlob = null;
+  let imageUrl = null;
+  try {
+    const res = await r2.get(photo.key);
+    imageBlob = await res.blob();
+    imageUrl = URL.createObjectURL(imageBlob);
+  } catch (err) {
+    toast(`加载图片失败：${err.message}`, true);
+    return;
+  }
+
+  const modalHtml = `
+    <div id="crop-modal" role="dialog" aria-modal="true" aria-label="图片裁切">
+      <div class="crop-header">
+        <h3><span>✂️</span> <span>矩形裁切</span></h3>
+        <div class="crop-info-text" id="crop-dimensions">选框：0 × 0 px</div>
+      </div>
+      <div class="crop-stage-container" id="crop-stage">
+        <div class="crop-wrapper" id="crop-wrapper">
+          <img class="crop-image" id="crop-target-img" src="${imageUrl}" alt="${esc(photo.name)}" crossorigin="anonymous">
+          <div class="crop-box" id="crop-box">
+            <div class="crop-grid">
+              <div class="crop-grid-line-h1"></div>
+              <div class="crop-grid-line-h2"></div>
+              <div class="crop-grid-line-v1"></div>
+              <div class="crop-grid-line-v2"></div>
+            </div>
+            <div class="crop-handle handle-nw" data-handle="nw"></div>
+            <div class="crop-handle handle-n" data-handle="n"></div>
+            <div class="crop-handle handle-ne" data-handle="ne"></div>
+            <div class="crop-handle handle-w" data-handle="w"></div>
+            <div class="crop-handle handle-e" data-handle="e"></div>
+            <div class="crop-handle handle-sw" data-handle="sw"></div>
+            <div class="crop-handle handle-s" data-handle="s"></div>
+            <div class="crop-handle handle-se" data-handle="se"></div>
+          </div>
+        </div>
+      </div>
+      <div class="crop-footer">
+        <button id="crop-btn-save" class="primary" title="保存裁切结果到未分类相册"><span>💾</span><span>保存至相册</span></button>
+        <button id="crop-btn-download" class="secondary" title="下载裁切图片到本地"><span>⬇️</span><span>下载</span></button>
+        <button id="crop-btn-share" class="secondary" title="分享裁切后的图片"><span>📤</span><span>分享</span></button>
+        <button id="crop-btn-cancel" class="cancel" title="取消裁切"><span>❌</span><span>取消</span></button>
+      </div>
+    </div>
+  `;
+
+  // 清除旧模态框
+  const oldModal = document.querySelector('#crop-modal');
+  if (oldModal) oldModal.remove();
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  const modal = document.querySelector('#crop-modal');
+  const imgEl = modal.querySelector('#crop-target-img');
+  const cropBox = modal.querySelector('#crop-box');
+  const wrapper = modal.querySelector('#crop-wrapper');
+  const infoEl = modal.querySelector('#crop-dimensions');
+
+  let cropState = {
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+    imgNaturalW: 0,
+    imgNaturalH: 0,
+    imgRenderW: 0,
+    imgRenderH: 0
+  };
+
+  const updateCropBoxStyle = () => {
+    cropBox.style.left = `${cropState.x}px`;
+    cropBox.style.top = `${cropState.y}px`;
+    cropBox.style.width = `${cropState.w}px`;
+    cropBox.style.height = `${cropState.h}px`;
+
+    // 计算实际裁剪像素分辨率
+    if (cropState.imgRenderW > 0 && cropState.imgRenderH > 0) {
+      const scaleX = cropState.imgNaturalW / cropState.imgRenderW;
+      const scaleY = cropState.imgNaturalH / cropState.imgRenderH;
+      const realW = Math.round(cropState.w * scaleX);
+      const realH = Math.round(cropState.h * scaleY);
+      infoEl.textContent = `选区：${realW} × ${realH} px`;
+    }
+  };
+
+  const initCropBox = () => {
+    cropState.imgNaturalW = imgEl.naturalWidth;
+    cropState.imgNaturalH = imgEl.naturalHeight;
+    cropState.imgRenderW = imgEl.clientWidth;
+    cropState.imgRenderH = imgEl.clientHeight;
+
+    // 默认选框：居中 80% 大小
+    const marginRatio = 0.1;
+    cropState.w = Math.max(30, Math.round(cropState.imgRenderW * (1 - 2 * marginRatio)));
+    cropState.h = Math.max(30, Math.round(cropState.imgRenderH * (1 - 2 * marginRatio)));
+    cropState.x = Math.round((cropState.imgRenderW - cropState.w) / 2);
+    cropState.y = Math.round((cropState.imgRenderH - cropState.h) / 2);
+
+    updateCropBoxStyle();
+  };
+
+  if (imgEl.complete && imgEl.naturalWidth > 0) {
+    initCropBox();
+  } else {
+    imgEl.onload = () => initCropBox();
+  }
+
+  // 窗口缩放自适应重新校准
+  const onWindowResize = () => {
+    if (!modal.isConnected || !imgEl.clientWidth) return;
+    const oldRenderW = cropState.imgRenderW || imgEl.clientWidth;
+    const oldRenderH = cropState.imgRenderH || imgEl.clientHeight;
+    cropState.imgRenderW = imgEl.clientWidth;
+    cropState.imgRenderH = imgEl.clientHeight;
+
+    const ratioX = cropState.imgRenderW / oldRenderW;
+    const ratioY = cropState.imgRenderH / oldRenderH;
+
+    cropState.x = Math.max(0, Math.min(cropState.imgRenderW - 20, cropState.x * ratioX));
+    cropState.y = Math.max(0, Math.min(cropState.imgRenderH - 20, cropState.y * ratioY));
+    cropState.w = Math.max(20, Math.min(cropState.imgRenderW - cropState.x, cropState.w * ratioX));
+    cropState.h = Math.max(20, Math.min(cropState.imgRenderH - cropState.y, cropState.h * ratioY));
+
+    updateCropBoxStyle();
+  };
+  window.addEventListener('resize', onWindowResize);
+
+  // 拖动选框与手柄拉伸逻辑
+  let isInteracting = false;
+  let activeAction = null; // 'move' 或 手柄名 'nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'
+  let startPointerX = 0;
+  let startPointerY = 0;
+  let startBox = { x: 0, y: 0, w: 0, h: 0 };
+  const minBoxSize = 20;
+
+  const onPointerDown = (e) => {
+    const handle = e.target.closest('.crop-handle');
+    if (handle) {
+      activeAction = handle.dataset.handle;
+    } else if (e.target.closest('#crop-box')) {
+      activeAction = 'move';
+    } else {
+      return;
+    }
+
+    isInteracting = true;
+    startPointerX = e.clientX;
+    startPointerY = e.clientY;
+    startBox = { x: cropState.x, y: cropState.y, w: cropState.w, h: cropState.h };
+
+    modal.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const onPointerMove = (e) => {
+    if (!isInteracting || !activeAction) return;
+
+    const dx = e.clientX - startPointerX;
+    const dy = e.clientY - startPointerY;
+    const maxW = cropState.imgRenderW;
+    const maxH = cropState.imgRenderH;
+
+    if (activeAction === 'move') {
+      let newX = startBox.x + dx;
+      let newY = startBox.y + dy;
+      // 边界限制
+      newX = Math.max(0, Math.min(maxW - startBox.w, newX));
+      newY = Math.max(0, Math.min(maxH - startBox.h, newY));
+      cropState.x = newX;
+      cropState.y = newY;
+    } else {
+      let newLeft = startBox.x;
+      let newTop = startBox.y;
+      let newRight = startBox.x + startBox.w;
+      let newBottom = startBox.y + startBox.h;
+
+      if (activeAction.includes('w')) {
+        newLeft = Math.max(0, Math.min(newRight - minBoxSize, startBox.x + dx));
+      }
+      if (activeAction.includes('e')) {
+        newRight = Math.min(maxW, Math.max(newLeft + minBoxSize, startBox.x + startBox.w + dx));
+      }
+      if (activeAction.includes('n')) {
+        newTop = Math.max(0, Math.min(newBottom - minBoxSize, startBox.y + dy));
+      }
+      if (activeAction.includes('s')) {
+        newBottom = Math.min(maxH, Math.max(newTop + minBoxSize, startBox.y + startBox.h + dy));
+      }
+
+      cropState.x = newLeft;
+      cropState.y = newTop;
+      cropState.w = newRight - newLeft;
+      cropState.h = newBottom - newTop;
+    }
+
+    updateCropBoxStyle();
+  };
+
+  const onPointerUp = (e) => {
+    if (isInteracting) {
+      isInteracting = false;
+      activeAction = null;
+      try {
+        modal.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
+
+  modal.addEventListener('pointerdown', onPointerDown);
+  modal.addEventListener('pointermove', onPointerMove);
+  modal.addEventListener('pointerup', onPointerUp);
+  modal.addEventListener('pointercancel', onPointerUp);
+
+  const cleanupModal = () => {
+    window.removeEventListener('resize', onWindowResize);
+    modal.removeEventListener('pointerdown', onPointerDown);
+    modal.removeEventListener('pointermove', onPointerMove);
+    modal.removeEventListener('pointerup', onPointerUp);
+    modal.removeEventListener('pointercancel', onPointerUp);
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    modal.remove();
+  };
+
+  // 生成裁切后的 Blob 及图片对象
+  const generateCroppedBlob = async () => {
+    const scaleX = cropState.imgNaturalW / cropState.imgRenderW;
+    const scaleY = cropState.imgNaturalH / cropState.imgRenderH;
+
+    const sourceX = Math.round(cropState.x * scaleX);
+    const sourceY = Math.round(cropState.y * scaleY);
+    const sourceW = Math.round(cropState.w * scaleX);
+    const sourceH = Math.round(cropState.h * scaleY);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = sourceW;
+    canvas.height = sourceH;
+    const ctx = canvas.getContext('2d');
+
+    // 绘制裁切部分
+    ctx.drawImage(
+      imgEl,
+      sourceX, sourceY, sourceW, sourceH,
+      0, 0, sourceW, sourceH
+    );
+
+    // 获取原始图片的 mimeType
+    const mimeType = imageBlob.type || 'image/jpeg';
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, mimeType, 0.92);
+    });
+
+    return { blob, width: sourceW, height: sourceH, mimeType };
+  };
+
+  // 生成新文件名：原文件名-裁剪.ext
+  const generateCroppedName = (originalName) => {
+    const lastDot = originalName.lastIndexOf('.');
+    if (lastDot > 0) {
+      const base = originalName.substring(0, lastDot);
+      const ext = originalName.substring(lastDot);
+      return `${base}-裁剪${ext}`;
+    }
+    return `${originalName}-裁剪.jpg`;
+  };
+
+  // 保存到云盘（未分类）
+  modal.querySelector('#crop-btn-save').onclick = async () => {
+    const saveBtn = modal.querySelector('#crop-btn-save');
+    saveBtn.disabled = true;
+    toast('正在生成并上传裁切图片…');
+
+    try {
+      const { blob, width, height, mimeType } = await generateCroppedBlob();
+      const croppedName = generateCroppedName(photo.name);
+      const date = new Date();
+      const ext = (croppedName.split('.').pop() || 'jpg').toLowerCase();
+      const key = `photos/${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${uuid()}.${ext}`;
+
+      const file = new File([blob], croppedName, { type: mimeType });
+
+      // 上传到 R2
+      await r2.put(key, file, (done, total) => {
+        toast(`正在上传裁切图片 ${Math.round((done / total) * 100)}%`);
+      });
+
+      const newPhoto = {
+        id: uuid(),
+        key,
+        name: croppedName,
+        size: blob.size,
+        takenAt: date.toISOString(),
+        uploadedAt: date.toISOString(),
+        album: '', // 标记为未分类
+        tags: [],
+        dimensions: `${width} × ${height}`,
+        trashed: false
+      };
+
+      index.photos.unshift(newPhoto);
+      await save();
+      cleanupModal();
+      renderApp();
+      toast(`裁切图片已保存为「${croppedName}」（未分类）`);
+    } catch (err) {
+      toast(`保存失败：${err.message}`, true);
+      saveBtn.disabled = false;
+    }
+  };
+
+  // 下载到本地
+  modal.querySelector('#crop-btn-download').onclick = async () => {
+    try {
+      toast('正在导出裁切图片…');
+      const { blob } = await generateCroppedBlob();
+      const croppedName = generateCroppedName(photo.name);
+      const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(blob),
+        download: croppedName
+      });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      toast(`已开始下载「${croppedName}」`);
+    } catch (err) {
+      toast(`下载失败：${err.message}`, true);
+    }
+  };
+
+  // 分享裁切图片
+  modal.querySelector('#crop-btn-share').onclick = async () => {
+    try {
+      toast('正在准备分享裁切图片…');
+      const { blob, mimeType } = await generateCroppedBlob();
+      const croppedName = generateCroppedName(photo.name);
+      const file = new File([blob], croppedName, { type: mimeType });
+
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: croppedName
+        });
+      } else {
+        toast('当前浏览器或系统不支持直接分享图片文件，请先下载后发送。', true);
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        toast(`分享失败：${err.message}`, true);
+      }
+    }
+  };
+
+  // 取消
+  modal.querySelector('#crop-btn-cancel').onclick = () => {
+    cleanupModal();
+  };
 }
 
 /**

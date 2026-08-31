@@ -1440,6 +1440,222 @@ dialog#viewer {
   border-color: rgba(239, 68, 68, 0.6);
 }
 
+/* ================= 图片裁剪模态框样式 ================= */
+#crop-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.95);
+  backdrop-filter: blur(16px);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+  user-select: none;
+  touch-action: none;
+}
+
+#crop-modal .crop-header {
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#crop-modal .crop-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#crop-modal .crop-header .crop-info-text {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+#crop-modal .crop-stage-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+}
+
+#crop-modal .crop-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+#crop-modal .crop-image {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 170px);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* 裁剪暗色蒙版与选框 */
+#crop-modal .crop-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #38bdf8;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  cursor: move;
+  touch-action: none;
+}
+
+/* 3x3 辅助网格线 */
+#crop-modal .crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  opacity: 0.6;
+}
+
+#crop-modal .crop-grid::before,
+#crop-modal .crop-grid::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#crop-modal .crop-grid-line-h1 {
+  position: absolute;
+  top: 33.333%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.4);
+}
+#crop-modal .crop-grid-line-h2 {
+  position: absolute;
+  top: 66.666%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.4);
+}
+#crop-modal .crop-grid-line-v1 {
+  position: absolute;
+  left: 33.333%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.4);
+}
+#crop-modal .crop-grid-line-v2 {
+  position: absolute;
+  left: 66.666%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* 8个调节手柄 */
+#crop-modal .crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #38bdf8;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+}
+
+#crop-modal .crop-handle.handle-nw { top: 0; left: 0; cursor: nwse-resize; }
+#crop-modal .crop-handle.handle-n  { top: 0; left: 50%; cursor: ns-resize; }
+#crop-modal .crop-handle.handle-ne { top: 0; left: 100%; cursor: nesw-resize; }
+#crop-modal .crop-handle.handle-w  { top: 50%; left: 0; cursor: ew-resize; }
+#crop-modal .crop-handle.handle-e  { top: 50%; left: 100%; cursor: ew-resize; }
+#crop-modal .crop-handle.handle-sw { top: 100%; left: 0; cursor: nesw-resize; }
+#crop-modal .crop-handle.handle-s  { top: 100%; left: 50%; cursor: ns-resize; }
+#crop-modal .crop-handle.handle-se { top: 100%; left: 100%; cursor: nwse-resize; }
+
+/* 底部操作工具条 */
+#crop-modal .crop-footer {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.9);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 20;
+}
+
+#crop-modal .crop-footer button {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+#crop-modal .crop-footer button:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+#crop-modal .crop-footer button.primary {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+#crop-modal .crop-footer button.primary:hover {
+  background: #1d4ed8;
+}
+
+#crop-modal .crop-footer button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+#crop-modal .crop-footer button.cancel {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+#crop-modal .crop-footer button.cancel:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+@media (max-width: 768px) {
+  #crop-modal .crop-handle {
+    width: 20px;
+    height: 20px;
+  }
+  #crop-modal .crop-footer button {
+    padding: 6px 12px;
+    font-size: 0.82rem;
+  }
+}
+
 /* ================= 深色模式适配 ================= */
 @media (prefers-color-scheme: dark) {
   :root {
