@@ -1629,12 +1629,7 @@ function renderSetup(saved = {}) {
       <form id="setup-form" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <label>Account ID<input required name="accountId" autocomplete="off" value="${esc(saved.accountId)}"></label>
         <label>Access Key ID<input required name="accessKeyId" autocomplete="off" value="${esc(saved.accessKeyId)}"></label>
-        <label>Secret Access Key
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <input required type="password" id="input-secret-key" name="secretAccessKey" autocomplete="new-password" style="flex: 1;" value="${esc(saved.secretAccessKey)}">
-            <button type="button" id="btn-toggle-secret" class="btn btn-secondary" style="padding: 0 12px; height: 42px; font-size: 0.85rem;" title="显示/隐藏密钥">👁️</button>
-          </div>
-        </label>
+        <label>Secret Access Key<input required type="password" name="secretAccessKey" autocomplete="new-password" value="${esc(saved.secretAccessKey)}"></label>
         <label>Bucket 名称<input required name="bucket" autocomplete="off" value="${esc(saved.bucket)}"></label>
         <label>
           图片域名 Base URL (可选)
@@ -1648,21 +1643,6 @@ function renderSetup(saved = {}) {
       <p class="help" style="margin-top: 14px;">详细开通与 CORS 配置请见 <a href="./README.md" target="_blank" rel="noopener noreferrer">README.md</a>。</p>
     </section>
   `;
-
-  // 显隐密钥逻辑
-  const toggleBtn = document.querySelector('#btn-toggle-secret');
-  const secretInput = document.querySelector('#input-secret-key');
-  if (toggleBtn && secretInput) {
-    toggleBtn.onclick = () => {
-      if (secretInput.type === 'password') {
-        secretInput.type = 'text';
-        toggleBtn.textContent = '🙈';
-      } else {
-        secretInput.type = 'password';
-        toggleBtn.textContent = '👁️';
-      }
-    };
-  }
 
   document.querySelector('#setup-form').onsubmit = async (event) => {
     event.preventDefault();
