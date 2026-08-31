@@ -34,7 +34,7 @@ let filteredPhotos = []; // 当前过滤与排序后的所有照片列表
 let intersectionObserver = null;
 
 // 工具辅助函数
-const APP_VERSION = 'v3.0.7'; // 与 Service Worker 缓存和发布版本保持同步
+const APP_VERSION = 'v3.0.2'; // 与 Service Worker 缓存和发布版本保持同步
 let swRegistration = null;
 let isRefreshing = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -49,6 +49,95 @@ const formatSize = value => {
 const uuid = () => crypto.randomUUID();
 
 /**
+ * 内存图片缓存管理器 (LRU Cache)
+ * 缓存已加载的 Blob URL 与网络 Promise，避免同一张图片重复请求网络并实现毫秒级秒开
+ */
+const imageMemoryCache = new Map();
+const MAX_MEMORY_CACHE_SIZE = 30;
+
+function getCachedImageUrl(key) {
+  if (!imageMemoryCache.has(key)) return null;
+  const item = imageMemoryCache.get(key);
+  // LRU 机制：提到最前
+  imageMemoryCache.delete(key);
+  imageMemoryCache.set(key, item);
+  return item.url;
+}
+
+function setCachedImageUrl(key, url, isBlob = false) {
+  if (imageMemoryCache.has(key)) {
+    imageMemoryCache.delete(key);
+  } else if (imageMemoryCache.size >= MAX_MEMORY_CACHE_SIZE) {
+    // 淘汰最久未使用的项并释放 ObjectURL 内存
+    const oldestKey = imageMemoryCache.keys().next().value;
+    const oldest = imageMemoryCache.get(oldestKey);
+    if (oldest?.isBlob && oldest.url) {
+      try { URL.revokeObjectURL(oldest.url); } catch {}
+    }
+    imageMemoryCache.delete(oldestKey);
+  }
+  imageMemoryCache.set(key, { url, isBlob, time: Date.now() });
+}
+
+// 记录当前活跃的预加载 Promise，防止重复请求
+const activePreloadTasks = new Map();
+
+/**
+ * 获取或加载高清大图（支持 LRU 缓存与 R2 Blob / 直链加载）
+ */
+async function loadPhotoHighResUrl(key) {
+  if (!key) return '';
+  const cached = getCachedImageUrl(key);
+  if (cached) return cached;
+
+  if (activePreloadTasks.has(key)) {
+    return activePreloadTasks.get(key);
+  }
+
+  const task = (async () => {
+    const publicUrl = getPublicImageUrl(key);
+    if (publicUrl) {
+      // 预先检测直链是否可用
+      try {
+        await new Promise((resolve, reject) => {
+          const probe = new Image();
+          probe.onload = () => resolve(publicUrl);
+          probe.onerror = () => reject(new Error('直链加载失败'));
+          probe.src = publicUrl;
+        });
+        setCachedImageUrl(key, publicUrl, false);
+        return publicUrl;
+      } catch {
+        // 直链失败回退到 R2 SDK 拉取 Blob
+      }
+    }
+
+    const response = await r2.get(key);
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    setCachedImageUrl(key, blobUrl, true);
+    return blobUrl;
+  })();
+
+  activePreloadTasks.set(key, task);
+  try {
+    const res = await task;
+    return res;
+  } finally {
+    activePreloadTasks.delete(key);
+  }
+}
+
+/**
+ * 预加载单张照片
+ */
+function preloadPhoto(photo) {
+  if (!photo?.key) return;
+  if (getCachedImageUrl(photo.key) || activePreloadTasks.has(photo.key)) return;
+  loadPhotoHighResUrl(photo.key).catch(() => {});
+}
+
+/**
  * 统一获取图片公开外链/直链 URL (base + '/' + key)
  * @param {string} key 对象的 key 路径
  * @returns {string} 拼接好的外链 URL，若未配置域名则返回空字符串
@@ -58,57 +147,6 @@ function getPublicImageUrl(key) {
   if (!base || !key) return '';
   const cleanKey = String(key).replace(/^\/+/, '');
   return `${base}/${cleanKey}`;
-}
-
-/**
- * 获取适用于查看器的高清大图 URL
- * 如果开启了 Cloudflare 缩放优化，则采用适合大屏展示的 1920px 宽度，质量 85，format=auto，兼顾极速加载与清晰度
- * 否则返回原始直链
- * @param {string} key 对象的 key 路径
- * @param {number} width 大图目标最大宽度（默认 1920px）
- * @returns {string}
- */
-function getViewerImageUrl(key, width = 1920) {
-  const base = config.getImgBaseUrl();
-  if (!base || !key) return '';
-  const cleanKey = String(key).replace(/^\/+/, '');
-  
-  if (config.getCfResizeEnabled()) {
-    return `${base}/thumb/width=${width},quality=85,format=auto/${cleanKey}`;
-  }
-  return `${base}/${cleanKey}`;
-}
-
-/**
- * 获取适用于缩略图的图片 URL
- * 如果开启了缩略图裁剪，则拼接 /thumb/width=360,quality=75,format=auto/ 参数
- * 否则返回普通直链
- * @param {string} key 对象的 key 路径
- * @param {number} width 缩略图目标宽度（默认 360px）
- * @returns {string}
- */
-function getThumbnailUrl(key, width = 360) {
-  const base = config.getImgBaseUrl();
-  if (!base || !key) return '';
-  const cleanKey = String(key).replace(/^\/+/, '');
-  
-  if (config.getCfResizeEnabled()) {
-    // 采用自定义 Worker 路径 /thumb/，规避 Cloudflare /cdn-cgi/ 保留路径拦截
-    return `${base}/thumb/width=${width},quality=75,format=auto/${cleanKey}`;
-  }
-  return `${base}/${cleanKey}`;
-}
-
-/**
- * 应用低性能 / 减少动效模式
- */
-function applyPerformanceMode() {
-  const reduceMotion = config.getReduceMotion();
-  if (reduceMotion) {
-    document.documentElement.classList.add('reduce-motion');
-  } else {
-    document.documentElement.classList.remove('reduce-motion');
-  }
 }
 
 /**
@@ -206,7 +244,6 @@ function setupServiceWorker() {
  * 初始化入口
  */
 async function init() {
-  applyPerformanceMode();
   setupServiceWorker();
   
   const saved = config.get();
@@ -361,10 +398,10 @@ function renderApp() {
           <span>${isSelected ? `已选中 <b>${selected.size}</b> 项` : `共 <b>${filteredPhotos.length}</b> 项`}</span>
         </div>
         <div class="bottom-actions-group">
-          ${view !== 'trash' ? '<button id="btn-bottom-upload" class="bottom-btn bottom-btn-upload"><span class="btn-icon">⬆️</span><span class="btn-text">上传</span></button>' : ''}
-          ${view !== 'trash' ? `<button id="btn-bottom-move-album" class="bottom-btn" ${isSelected ? '' : 'style="display:none;"'}><span class="btn-icon">📁</span><span class="btn-text">移至相册</span></button>` : ''}
-          <button id="btn-bottom-download" class="bottom-btn bottom-btn-download" ${isSelected ? '' : 'disabled'}><span class="btn-icon">⬇️</span><span class="btn-text">下载</span></button>
-          <button id="btn-bottom-delete" class="bottom-btn bottom-btn-delete ${isSelected ? 'active-lit' : ''}" ${isSelected ? '' : 'disabled'}><span class="btn-icon">🗑️</span><span class="btn-text">删除</span></button>
+          ${view !== 'trash' ? '<button id="btn-bottom-upload" class="bottom-btn bottom-btn-upload">⬆️ 上传</button>' : ''}
+          ${view !== 'trash' ? `<button id="btn-bottom-move-album" class="bottom-btn" ${isSelected ? '' : 'style="display:none;"'}>📁 移至相册</button>` : ''}
+          <button id="btn-bottom-download" class="bottom-btn bottom-btn-download" ${isSelected ? '' : 'disabled'}>⬇️ 下载</button>
+          <button id="btn-bottom-delete" class="bottom-btn bottom-btn-delete ${isSelected ? 'active-lit' : ''}" ${isSelected ? '' : 'disabled'}>🗑️ 删除</button>
         </div>
       </div>
     </footer>
@@ -468,19 +505,18 @@ function renderPhotosBatch(reset = false) {
 
 /**
  * 渲染单张照片卡片 HTML
- * 如果配置了图片域名，直接赋 src 并设置 loading="lazy" 与 decoding="async"，体验秒开且解码不卡顿主线程
+ * 如果配置了图片域名，直接赋 src 并设置 loading="lazy"，体验秒开且不用二次等待
  */
 function renderPhotoCard(photo) {
   const isChecked = selected.has(photo.id);
-  const thumbUrl = getThumbnailUrl(photo.key, 360);
+  const publicUrl = getPublicImageUrl(photo.key);
   return `
     <article class="photo-card ${isChecked ? 'selected' : ''}" data-id="${photo.id}">
       <img data-key="${esc(photo.key)}" 
-           ${thumbUrl ? `src="${esc(thumbUrl)}"` : ''} 
+           ${publicUrl ? `src="${esc(publicUrl)}"` : ''} 
            alt="${esc(photo.name)}" 
-           data-loaded="${thumbUrl ? 'true' : 'false'}" 
-           loading="lazy"
-           decoding="async">
+           data-loaded="${publicUrl ? 'true' : 'false'}" 
+           loading="lazy">
       <div class="check-indicator" data-check-id="${photo.id}" title="多选勾选">✓</div>
       <div class="photo-info-bar">
         <span class="photo-title" title="${esc(photo.name)}">${esc(photo.name)}</span>
@@ -492,7 +528,7 @@ function renderPhotoCard(photo) {
 
 /**
  * 懒加载缩略图
- * 优先使用自定义图片域名（含缩略图参数），如未配置或加载失败则回退到 R2 SDK 获取 Blob
+ * 优先使用自定义图片域名直链，如未配置或加载失败则回退到 R2 SDK 获取 Blob
  */
 async function loadLazyThumbnails() {
   const images = document.querySelectorAll('img[data-key]');
@@ -500,11 +536,11 @@ async function loadLazyThumbnails() {
     const key = img.dataset.key;
     if (!key) continue;
 
-    const thumbUrl = getThumbnailUrl(key, 360);
+    const publicUrl = getPublicImageUrl(key);
 
-    if (thumbUrl) {
+    if (publicUrl) {
       // 已经设置并成功加载了直链则跳过
-      if (img.dataset.loaded === 'true' && img.src === thumbUrl) continue;
+      if (img.dataset.loaded === 'true' && img.src === publicUrl) continue;
 
       img.onerror = async () => {
         img.onerror = null;
@@ -520,16 +556,24 @@ async function loadLazyThumbnails() {
       img.onload = () => {
         img.dataset.loaded = 'true';
       };
-      img.src = thumbUrl;
+      img.src = publicUrl;
       continue;
     }
 
     // 未配置图片域名时，走 R2 SDK 签名拉取
     if (img.dataset.loaded === 'true') continue;
     try {
+      const cached = getCachedImageUrl(key);
+      if (cached) {
+        img.src = cached;
+        img.dataset.loaded = 'true';
+        continue;
+      }
       const response = await r2.get(key);
       const blob = await response.blob();
-      img.src = URL.createObjectURL(blob);
+      const blobUrl = URL.createObjectURL(blob);
+      setCachedImageUrl(key, blobUrl, true);
+      img.src = blobUrl;
       img.dataset.loaded = 'true';
     } catch (err) {
       img.alt = '加载失败';
@@ -1200,13 +1244,7 @@ async function batchMoveAlbum() {
 /**
  * 文件上传逻辑
  */
-input.onchange = () => {
-  const selectedFiles = [...input.files];
-  // 延迟一帧执行，给移动端系统相册弹窗关闭与主线程释放渲染时间
-  setTimeout(() => {
-    upload(selectedFiles);
-  }, 100);
-};
+input.onchange = () => upload([...input.files]);
 
 async function upload(files) {
   if (!files || !files.length) return;
@@ -1301,8 +1339,6 @@ async function download(photo) {
  */
 function renderSettings() {
   const currentBaseUrl = config.getImgBaseUrl();
-  const cfResizeEnabled = config.getCfResizeEnabled();
-  const reduceMotion = config.getReduceMotion();
   const sampleKey = index.photos && index.photos[0] ? index.photos[0].key : 'photos/2026/08/sample.jpg';
   const sampleUrl = currentBaseUrl ? `${currentBaseUrl}/${sampleKey}` : '';
 
@@ -1311,38 +1347,6 @@ function renderSettings() {
       <h1>⚙️ 相册设置</h1>
       <p>Cloudflare R2 存储凭据及图片域名仅安全保存在当前浏览器的 localStorage 中。</p>
       
-      <!-- 性能与动效设置卡片 -->
-      <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
-        <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
-          <span>⚡ 移动端性能与显示偏好</span>
-        </h3>
-        <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; line-height: 1.5;">
-          针对低性能手机或海量照片相册，可开启以下优化以消除卡顿并提升滑动帧率。
-        </p>
-
-        <div style="display: flex; flex-direction: column; gap: 14px;">
-          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
-            <input type="checkbox" id="chk-reduce-motion" ${reduceMotion ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
-            <div>
-              <strong>极速省电模式 / 关闭动画</strong>
-              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
-                关闭毛玻璃模糊特效、悬浮缩放动画与全屏查看器过渡，大幅减轻 GPU 负载并解决移动端发热与卡顿。
-              </div>
-            </div>
-          </label>
-
-          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
-            <input type="checkbox" id="chk-cf-resize" ${cfResizeEnabled ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
-            <div>
-              <strong>开启 Cloudflare 实时缩略图裁剪 (Image Resizing)</strong>
-              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
-                列表页自动请求 <code>/cdn-cgi/image/width=360,quality=75,format=auto/</code> 动态压缩 WebP 缩略图（需要你的自定义域名在 Cloudflare 开启了 Image Resizing 或对应 Worker/CDN 规则）。
-              </div>
-            </div>
-          </label>
-        </div>
-      </div>
-
       <!-- 图片域名 Base URL 配置卡片 -->
       <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
         <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
@@ -1402,25 +1406,6 @@ function renderSettings() {
       </div>
     </section>
   `;
-
-  // 监听动效开关
-  const chkReduceMotion = document.querySelector('#chk-reduce-motion');
-  if (chkReduceMotion) {
-    chkReduceMotion.onchange = () => {
-      config.setReduceMotion(chkReduceMotion.checked);
-      applyPerformanceMode();
-      toast(chkReduceMotion.checked ? '已开启极速省电模式' : '已恢复标准动画效果');
-    };
-  }
-
-  // 监听 Cloudflare 缩略图开关
-  const chkCfResize = document.querySelector('#chk-cf-resize');
-  if (chkCfResize) {
-    chkCfResize.onchange = () => {
-      config.setCfResizeEnabled(chkCfResize.checked);
-      toast(chkCfResize.checked ? '已启用 Cloudflare 缩略图裁剪' : '已关闭 Cloudflare 缩略图裁剪');
-    };
-  }
 
   // 动态输入时更新预览
   const inputBase = document.querySelector('#input-img-base-url');
@@ -1620,27 +1605,27 @@ function renderSetup(saved = {}) {
     <section class="setup">
       <div class="logo">📸</div>
       <h1>云端相册配置</h1>
-      <p>照片直接保存到您自己的 Cloudflare R2 存储桶。凭据仅保存在此设备浏览器本地，不会上传至任何第三方服务器。</p>
+      <p>照片直接保存到您自己的 Cloudflare R2 存储桶。凭据仅保存在此设备浏览器中，不会上传至任何第三方服务器。</p>
       <ol style="margin-left: 20px; margin-bottom: 16px; color: var(--muted); line-height: 1.8;">
         <li>登录 Cloudflare 控制台并创建 R2 存储桶</li>
         <li>创建拥有对象读写权限的 R2 API 令牌</li>
-        <li>填写下面的存储凭据并连接</li>
+        <li>填写下面的凭据并测试连接</li>
       </ol>
-      <form id="setup-form" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-        <label>Account ID<input required name="accountId" autocomplete="off" value="${esc(saved.accountId)}"></label>
-        <label>Access Key ID<input required name="accessKeyId" autocomplete="off" value="${esc(saved.accessKeyId)}"></label>
-        <label>Secret Access Key<input required type="password" name="secretAccessKey" autocomplete="new-password" value="${esc(saved.secretAccessKey)}"></label>
-        <label>Bucket 名称<input required name="bucket" autocomplete="off" value="${esc(saved.bucket)}"></label>
+      <form id="setup-form">
+        <label>Account ID<input required name="accountId" value="${esc(saved.accountId)}"></label>
+        <label>Access Key ID<input required name="accessKeyId" value="${esc(saved.accessKeyId)}"></label>
+        <label>Secret Access Key<input required type="password" name="secretAccessKey" value="${esc(saved.secretAccessKey)}"></label>
+        <label>Bucket 名称<input required name="bucket" value="${esc(saved.bucket)}"></label>
         <label>
           图片域名 Base URL (可选)
-          <input name="imgBaseUrl" autocomplete="off" placeholder="例如：https://cdn.example.com 或 https://pub-xxx.r2.dev" value="${esc(currentBaseUrl)}">
+          <input name="imgBaseUrl" placeholder="例如：https://cdn.example.com 或 https://pub-xxx.r2.dev" value="${esc(currentBaseUrl)}">
           <small style="color: var(--muted); font-size: 0.8rem; display: block; margin-top: 4px;">
             用于公开直链加速、图片外链复制及分享。留空则通过 R2 接口获取。
           </small>
         </label>
         <button type="submit" class="primary">测试连接并保存</button>
       </form>
-      <p class="help" style="margin-top: 14px;">详细开通与 CORS 配置请见 <a href="./README.md" target="_blank" rel="noopener noreferrer">README.md</a>。</p>
+      <p class="help" style="margin-top: 14px;">详细开通与 CORS 配置请见 <a href="./README.md" target="_blank">README.md</a>。</p>
     </section>
   `;
 
@@ -1776,12 +1761,12 @@ function openViewer(photo, photos) {
       </div>
 
       <footer>
-        <button id="rename-photo" title="重命名图片"><span class="btn-icon">✏️</span><span class="btn-text">重命名</span></button>
-        <button id="move-photo" title="移动到相册"><span class="btn-icon">📁</span><span class="btn-text">移动</span></button>
-        <button id="crop-photo" title="矩形裁切图片"><span class="btn-icon">✂️</span><span class="btn-text">裁切</span></button>
-        <button id="share" title="分享图片"><span class="btn-icon">📤</span><span class="btn-text">分享</span></button>
-        <button id="get" title="下载此图片"><span class="btn-icon">⬇️</span><span class="btn-text">下载</span></button>
-        <button id="remove" class="danger" title="删除此图片"><span class="btn-icon">🗑️</span><span class="btn-text">删除</span></button>
+        <button id="rename-photo" title="重命名图片">✏️ 重命名</button>
+        <button id="move-photo" title="移动到相册">📁 移动</button>
+        ${publicUrl ? '<button id="copy-link" title="复制图片直链">🔗 复制外链</button>' : ''}
+        <button id="share" title="系统分享">📤 分享</button>
+        <button id="get" title="下载此图片">⬇️ 下载</button>
+        <button id="remove" class="danger" title="删除此图片">🗑️ 删除</button>
       </footer>
     </dialog>
   `;
@@ -1794,27 +1779,39 @@ function openViewer(photo, photos) {
 
   const img = document.querySelector('#image-stage img');
 
-  // 加载大图逻辑：配置了图片域名则优先直链加载（开启CF缩放下自动使用适合屏幕的高清图并支持渐进平滑过渡），失败或未配置时回退到 R2 SDK 拉取 Blob
-  const viewerImageUrl = getViewerImageUrl(photo.key);
-  if (viewerImageUrl) {
-    img.onerror = async () => {
-      img.onerror = null;
-      try {
-        const res = await r2.get(photo.key);
-        const blob = await res.blob();
-        img.src = URL.createObjectURL(blob);
-      } catch (err) {
-        toast(`图片加载失败：${err.message}`, true);
-      }
-    };
-    img.src = viewerImageUrl;
-  } else {
-    r2.get(photo.key)
-      .then(res => res.blob())
-      .then(blob => {
-        if (img) img.src = URL.createObjectURL(blob);
-      })
-      .catch(err => toast(`图片加载失败：${err.message}`, true));
+  // 1. 缩略图秒开占位（Blur-up / 零等待）：从当前页面已有的缩略图或缓存中即时提取展示
+  const thumbnailEl = document.querySelector(`img[data-key="${CSS.escape(photo.key)}"]`);
+  const existingThumbSrc = thumbnailEl ? thumbnailEl.src : getCachedImageUrl(photo.key);
+  if (existingThumbSrc) {
+    img.src = existingThumbSrc;
+    img.style.filter = 'blur(4px)';
+    img.style.transition = 'filter 0.25s ease';
+  }
+
+  // 2. 异步拉取高清大图，并在加载完成后丝滑替换并清除模糊
+  loadPhotoHighResUrl(photo.key)
+    .then(highResUrl => {
+      if (!img || !document.querySelector('#viewer')) return;
+      const tempImg = new Image();
+      tempImg.onload = () => {
+        if (!img || !document.querySelector('#viewer')) return;
+        img.src = highResUrl;
+        img.style.filter = 'none';
+      };
+      tempImg.src = highResUrl;
+    })
+    .catch(err => {
+      toast(`高清大图加载失败：${err.message}`, true);
+    });
+
+  // 3. 智能后台预加载：自动预加载上一张与下一张照片的高清图，确保切图秒开
+  if (photos && photos.length > 1) {
+    const prevIdx = (currentViewerIndex - 1 + photos.length) % photos.length;
+    const nextIdx = (currentViewerIndex + 1) % photos.length;
+    setTimeout(() => {
+      preloadPhoto(photos[nextIdx]);
+      preloadPhoto(photos[prevIdx]);
+    }, 150);
   }
 
   const dialog = document.querySelector('#viewer');
@@ -1928,52 +1925,56 @@ function openViewer(photo, photos) {
     });
   };
 
-  document.querySelector('#share').onclick = async () => {
-    try {
-      toast('正在准备分享文件…');
-      const res = await r2.get(photo.key);
-      const blob = await res.blob();
-      const file = new File([blob], photo.name, { type: blob.type || 'image/jpeg' });
-
-      // 优先尝试以图片文件形式发起系统分享（QQ、微信等应用接收图片消息）
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: photo.name
-        });
+  // 复制直链按钮
+  const copyLinkBtn = document.querySelector('#copy-link');
+  if (copyLinkBtn) {
+    copyLinkBtn.onclick = async () => {
+      const url = getPublicImageUrl(photo.key);
+      if (!url) {
+        toast('请先在相册设置中配置图片域名 Base URL', true);
         return;
       }
+      const ok = await copyToClipboard(url);
+      if (ok) {
+        toast('已复制图片直链到剪贴板 📋');
+      } else {
+        prompt('图片直链如下，可手动复制：', url);
+      }
+    };
+  }
 
-      // 如果浏览器不支持文件分享，但配置了直链且支持URL分享
-      const pubUrl = getPublicImageUrl(photo.key);
-      if (pubUrl && navigator.share) {
+  document.querySelector('#share').onclick = async () => {
+    const pubUrl = getPublicImageUrl(photo.key);
+    // 如果配置了图片外链且系统支持 URL 分享
+    if (pubUrl && navigator.share) {
+      try {
         await navigator.share({
           title: photo.name,
           text: `${photo.name} - 云端相册`,
           url: pubUrl
         });
         return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
       }
+    }
 
-      // 降级复制链接或提示
-      if (pubUrl) {
+    // 默认尝试原生文件分享
+    try {
+      const blob = await (await r2.get(photo.key)).blob();
+      const file = new File([blob], photo.name, { type: blob.type });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: photo.name, files: [file] });
+      } else if (pubUrl) {
         const ok = await copyToClipboard(pubUrl);
-        toast(ok ? '当前环境不支持直接分享图片，已复制图片链接' : '当前环境不支持文件分享');
+        toast(ok ? '已复制图片链接到剪贴板' : '已生成外链');
       } else {
-        toast('当前浏览器或系统不支持原生图片分享', true);
+        toast('当前浏览器环境不支持文件原生分享。', true);
       }
     } catch (e) {
       if (e.name !== 'AbortError') toast(`分享失败：${e.message}`, true);
     }
   };
-
-  // 矩形裁切按钮
-  const cropBtn = document.querySelector('#crop-photo');
-  if (cropBtn) {
-    cropBtn.onclick = () => {
-      openCropModal(photo);
-    };
-  }
 
   document.querySelector('#remove').onclick = async () => {
     selected = new Set([photo.id]);
@@ -1981,581 +1982,38 @@ function openViewer(photo, photos) {
     await batchDelete();
   };
 
-  initViewerZoomAndPan(document.querySelector('#image-stage'), () => switchPhoto(-1), () => switchPhoto(1));
+  gesture(document.querySelector('#image-stage'), () => switchPhoto(-1), () => switchPhoto(1));
 }
 
 /**
- * 图片平移拖拽、鼠标滚轮缩放、移动端双指捏合缩放及轻扫切图支持
- */
-function initViewerZoomAndPan(stage, onPrev, onNext) {
-  if (!stage) return;
-  const img = stage.querySelector('img');
-  if (!img) return;
-
-  let scale = 1;
-  let translateX = 0;
-  let translateY = 0;
-  let isDragging = false;
-  let startX = 0;
-  let startY = 0;
-  let initialTranslateX = 0;
-  let initialTranslateY = 0;
-  let activePointers = new Map();
-  let initialPinchDistance = 0;
-  let initialPinchScale = 1;
-
-  const minScale = 0.5;
-  const maxScale = 5;
-
-  const updateTransform = (smooth = false) => {
-    img.style.transition = smooth ? 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)' : 'none';
-    img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-    img.style.cursor = scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
-  };
-
-  const resetZoom = (smooth = true) => {
-    scale = 1;
-    translateX = 0;
-    translateY = 0;
-    updateTransform(smooth);
-  };
-
-  // 鼠标滚轮缩放 (以鼠标位置或中心为锚点)
-  stage.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-    const newScale = Math.min(Math.max(scale * zoomFactor, minScale), maxScale);
-
-    if (newScale === scale) return;
-
-    if (newScale <= 1) {
-      scale = 1;
-      translateX = 0;
-      translateY = 0;
-    } else {
-      const rect = stage.getBoundingClientRect();
-      const mouseX = e.clientX - (rect.left + rect.width / 2);
-      const mouseY = e.clientY - (rect.top + rect.height / 2);
-
-      // 缩放中心平移微调
-      translateX -= (mouseX - translateX) * (zoomFactor - 1);
-      translateY -= (mouseY - translateY) * (zoomFactor - 1);
-      scale = newScale;
-    }
-    updateTransform(false);
-  }, { passive: false });
-
-  // 双击快速放大/复原
-  stage.addEventListener('dblclick', (e) => {
-    e.preventDefault();
-    if (scale > 1.2) {
-      resetZoom(true);
-    } else {
-      scale = 2.5;
-      const rect = stage.getBoundingClientRect();
-      const mouseX = e.clientX - (rect.left + rect.width / 2);
-      const mouseY = e.clientY - (rect.top + rect.height / 2);
-      translateX = -mouseX * 0.8;
-      translateY = -mouseY * 0.8;
-      updateTransform(true);
-    }
-  });
-
-  // 指针按下（鼠标/单指触摸/多指触摸）
-  stage.addEventListener('pointerdown', (e) => {
-    // 忽略左右导航按钮上的点击事件
-    if (e.target.closest('.viewer-nav-btn')) return;
-
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    stage.setPointerCapture(e.pointerId);
-
-    if (activePointers.size === 1) {
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      initialTranslateX = translateX;
-      initialTranslateY = translateY;
-      img.style.transition = 'none';
-    } else if (activePointers.size === 2) {
-      // 双指捏合开始
-      isDragging = false;
-      const pts = Array.from(activePointers.values());
-      initialPinchDistance = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      initialPinchScale = scale;
-    }
-  });
-
-  // 指针移动
-  stage.addEventListener('pointermove', (e) => {
-    if (!activePointers.has(e.pointerId)) return;
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    if (activePointers.size === 1 && isDragging) {
-      const deltaX = e.clientX - startX;
-      const deltaY = e.clientY - startY;
-
-      if (scale > 1) {
-        // 放大模式：自由拖动画布
-        translateX = initialTranslateX + deltaX;
-        translateY = initialTranslateY + deltaY;
-        updateTransform(false);
-      }
-    } else if (activePointers.size === 2) {
-      // 双指捏合缩放
-      const pts = Array.from(activePointers.values());
-      const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (initialPinchDistance > 0) {
-        const factor = currentDist / initialPinchDistance;
-        scale = Math.min(Math.max(initialPinchScale * factor, minScale), maxScale);
-        updateTransform(false);
-      }
-    }
-  });
-
-  // 指针抬起或取消
-  const onPointerEnd = (e) => {
-    if (activePointers.has(e.pointerId)) {
-      const startPt = { x: startX, y: startY };
-      const endPt = { x: e.clientX, y: e.clientY };
-      const deltaX = endPt.x - startPt.x;
-      const deltaY = endPt.y - startPt.y;
-
-      activePointers.delete(e.pointerId);
-
-      // 如果未放大（scale <= 1），单指水平滑动超出阈值触发切图
-      if (scale <= 1 && Math.abs(deltaX) > 60 && Math.abs(deltaY) < 100) {
-        if (deltaX < 0) {
-          onNext?.();
-        } else {
-          onPrev?.();
-        }
-      }
-
-      // 如果缩放比例小于 1，松手后自动回弹恢复到 1
-      if (scale < 1) {
-        resetZoom(true);
-      }
-    }
-
-    if (activePointers.size === 0) {
-      isDragging = false;
-      img.style.cursor = scale > 1 ? 'grab' : 'default';
-    }
-  };
-
-  stage.addEventListener('pointerup', onPointerEnd);
-  stage.addEventListener('pointercancel', onPointerEnd);
-}
-
-/**
- * 矩形裁切模态框及操作
- */
-async function openCropModal(photo) {
-  toast('正在加载图片…');
-  let imageBlob = null;
-  let imageUrl = null;
-  try {
-    const res = await r2.get(photo.key);
-    imageBlob = await res.blob();
-    imageUrl = URL.createObjectURL(imageBlob);
-  } catch (err) {
-    toast(`加载图片失败：${err.message}`, true);
-    return;
-  }
-
-  const modalHtml = `
-    <div id="crop-modal" role="dialog" aria-modal="true" aria-label="图片裁切">
-      <div class="crop-header">
-        <h3><span>✂️</span> <span>矩形裁切</span></h3>
-        <div class="crop-info-text" id="crop-dimensions">选框：0 × 0 px</div>
-      </div>
-      <div class="crop-stage-container" id="crop-stage">
-        <div class="crop-wrapper" id="crop-wrapper">
-          <img class="crop-image" id="crop-target-img" src="${imageUrl}" alt="${esc(photo.name)}" crossorigin="anonymous">
-          <div class="crop-box" id="crop-box">
-            <div class="crop-grid">
-              <div class="crop-grid-line-h1"></div>
-              <div class="crop-grid-line-h2"></div>
-              <div class="crop-grid-line-v1"></div>
-              <div class="crop-grid-line-v2"></div>
-            </div>
-            <div class="crop-handle handle-nw" data-handle="nw"></div>
-            <div class="crop-handle handle-n" data-handle="n"></div>
-            <div class="crop-handle handle-ne" data-handle="ne"></div>
-            <div class="crop-handle handle-w" data-handle="w"></div>
-            <div class="crop-handle handle-e" data-handle="e"></div>
-            <div class="crop-handle handle-sw" data-handle="sw"></div>
-            <div class="crop-handle handle-s" data-handle="s"></div>
-            <div class="crop-handle handle-se" data-handle="se"></div>
-          </div>
-        </div>
-      </div>
-      <div class="crop-footer">
-        <button id="crop-btn-save" class="primary" title="保存裁切结果到未分类相册"><span>💾</span><span>保存至相册</span></button>
-        <button id="crop-btn-download" class="secondary" title="下载裁切图片到本地"><span>⬇️</span><span>下载</span></button>
-        <button id="crop-btn-share" class="secondary" title="分享裁切后的图片"><span>📤</span><span>分享</span></button>
-        <button id="crop-btn-cancel" class="cancel" title="取消裁切"><span>❌</span><span>取消</span></button>
-      </div>
-    </div>
-  `;
-
-  // 清除旧模态框
-  const oldModal = document.querySelector('#crop-modal');
-  if (oldModal) oldModal.remove();
-
-  document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-  const modal = document.querySelector('#crop-modal');
-  const imgEl = modal.querySelector('#crop-target-img');
-  const cropBox = modal.querySelector('#crop-box');
-  const wrapper = modal.querySelector('#crop-wrapper');
-  const infoEl = modal.querySelector('#crop-dimensions');
-
-  let cropState = {
-    x: 0,
-    y: 0,
-    w: 0,
-    h: 0,
-    imgNaturalW: 0,
-    imgNaturalH: 0,
-    imgRenderW: 0,
-    imgRenderH: 0
-  };
-
-  const updateCropBoxStyle = () => {
-    cropBox.style.left = `${cropState.x}px`;
-    cropBox.style.top = `${cropState.y}px`;
-    cropBox.style.width = `${cropState.w}px`;
-    cropBox.style.height = `${cropState.h}px`;
-
-    // 计算实际裁剪像素分辨率
-    if (cropState.imgRenderW > 0 && cropState.imgRenderH > 0) {
-      const scaleX = cropState.imgNaturalW / cropState.imgRenderW;
-      const scaleY = cropState.imgNaturalH / cropState.imgRenderH;
-      const realW = Math.round(cropState.w * scaleX);
-      const realH = Math.round(cropState.h * scaleY);
-      infoEl.textContent = `选区：${realW} × ${realH} px`;
-    }
-  };
-
-  const initCropBox = () => {
-    cropState.imgNaturalW = imgEl.naturalWidth;
-    cropState.imgNaturalH = imgEl.naturalHeight;
-    cropState.imgRenderW = imgEl.clientWidth;
-    cropState.imgRenderH = imgEl.clientHeight;
-
-    // 默认选框：居中 80% 大小
-    const marginRatio = 0.1;
-    cropState.w = Math.max(30, Math.round(cropState.imgRenderW * (1 - 2 * marginRatio)));
-    cropState.h = Math.max(30, Math.round(cropState.imgRenderH * (1 - 2 * marginRatio)));
-    cropState.x = Math.round((cropState.imgRenderW - cropState.w) / 2);
-    cropState.y = Math.round((cropState.imgRenderH - cropState.h) / 2);
-
-    updateCropBoxStyle();
-  };
-
-  if (imgEl.complete && imgEl.naturalWidth > 0) {
-    initCropBox();
-  } else {
-    imgEl.onload = () => initCropBox();
-  }
-
-  // 窗口缩放自适应重新校准
-  const onWindowResize = () => {
-    if (!modal.isConnected || !imgEl.clientWidth) return;
-    const oldRenderW = cropState.imgRenderW || imgEl.clientWidth;
-    const oldRenderH = cropState.imgRenderH || imgEl.clientHeight;
-    cropState.imgRenderW = imgEl.clientWidth;
-    cropState.imgRenderH = imgEl.clientHeight;
-
-    const ratioX = cropState.imgRenderW / oldRenderW;
-    const ratioY = cropState.imgRenderH / oldRenderH;
-
-    cropState.x = Math.max(0, Math.min(cropState.imgRenderW - 20, cropState.x * ratioX));
-    cropState.y = Math.max(0, Math.min(cropState.imgRenderH - 20, cropState.y * ratioY));
-    cropState.w = Math.max(20, Math.min(cropState.imgRenderW - cropState.x, cropState.w * ratioX));
-    cropState.h = Math.max(20, Math.min(cropState.imgRenderH - cropState.y, cropState.h * ratioY));
-
-    updateCropBoxStyle();
-  };
-  window.addEventListener('resize', onWindowResize);
-
-  // 拖动选框与手柄拉伸逻辑
-  let isInteracting = false;
-  let activeAction = null; // 'move' 或 手柄名 'nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'
-  let startPointerX = 0;
-  let startPointerY = 0;
-  let startBox = { x: 0, y: 0, w: 0, h: 0 };
-  const minBoxSize = 20;
-
-  const onPointerDown = (e) => {
-    const handle = e.target.closest('.crop-handle');
-    if (handle) {
-      activeAction = handle.dataset.handle;
-    } else if (e.target.closest('#crop-box')) {
-      activeAction = 'move';
-    } else {
-      return;
-    }
-
-    isInteracting = true;
-    startPointerX = e.clientX;
-    startPointerY = e.clientY;
-    startBox = { x: cropState.x, y: cropState.y, w: cropState.w, h: cropState.h };
-
-    modal.setPointerCapture(e.pointerId);
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const onPointerMove = (e) => {
-    if (!isInteracting || !activeAction) return;
-
-    const dx = e.clientX - startPointerX;
-    const dy = e.clientY - startPointerY;
-    const maxW = cropState.imgRenderW;
-    const maxH = cropState.imgRenderH;
-
-    if (activeAction === 'move') {
-      let newX = startBox.x + dx;
-      let newY = startBox.y + dy;
-      // 边界限制
-      newX = Math.max(0, Math.min(maxW - startBox.w, newX));
-      newY = Math.max(0, Math.min(maxH - startBox.h, newY));
-      cropState.x = newX;
-      cropState.y = newY;
-    } else {
-      let newLeft = startBox.x;
-      let newTop = startBox.y;
-      let newRight = startBox.x + startBox.w;
-      let newBottom = startBox.y + startBox.h;
-
-      if (activeAction.includes('w')) {
-        newLeft = Math.max(0, Math.min(newRight - minBoxSize, startBox.x + dx));
-      }
-      if (activeAction.includes('e')) {
-        newRight = Math.min(maxW, Math.max(newLeft + minBoxSize, startBox.x + startBox.w + dx));
-      }
-      if (activeAction.includes('n')) {
-        newTop = Math.max(0, Math.min(newBottom - minBoxSize, startBox.y + dy));
-      }
-      if (activeAction.includes('s')) {
-        newBottom = Math.min(maxH, Math.max(newTop + minBoxSize, startBox.y + startBox.h + dy));
-      }
-
-      cropState.x = newLeft;
-      cropState.y = newTop;
-      cropState.w = newRight - newLeft;
-      cropState.h = newBottom - newTop;
-    }
-
-    updateCropBoxStyle();
-  };
-
-  const onPointerUp = (e) => {
-    if (isInteracting) {
-      isInteracting = false;
-      activeAction = null;
-      try {
-        modal.releasePointerCapture(e.pointerId);
-      } catch {}
-    }
-  };
-
-  modal.addEventListener('pointerdown', onPointerDown);
-  modal.addEventListener('pointermove', onPointerMove);
-  modal.addEventListener('pointerup', onPointerUp);
-  modal.addEventListener('pointercancel', onPointerUp);
-
-  const cleanupModal = () => {
-    window.removeEventListener('resize', onWindowResize);
-    modal.removeEventListener('pointerdown', onPointerDown);
-    modal.removeEventListener('pointermove', onPointerMove);
-    modal.removeEventListener('pointerup', onPointerUp);
-    modal.removeEventListener('pointercancel', onPointerUp);
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    modal.remove();
-  };
-
-  // 生成裁切后的 Blob 及图片对象（支持超大分辨率自适应优化与防模糊插值）
-  const generateCroppedBlob = async () => {
-    const scaleX = cropState.imgNaturalW / cropState.imgRenderW;
-    const scaleY = cropState.imgNaturalH / cropState.imgRenderH;
-
-    const sourceX = Math.round(cropState.x * scaleX);
-    const sourceY = Math.round(cropState.y * scaleY);
-    let targetW = Math.round(cropState.w * scaleX);
-    let targetH = Math.round(cropState.h * scaleY);
-
-    // 最大边长限制在 3840px (4K 超高清)，既保证极端细腻的画质，又防止手机原图裁切后文件体积爆炸
-    const maxSide = 3840;
-    const maxDimension = Math.max(targetW, targetH);
-    if (maxDimension > maxSide) {
-      const resizeRatio = maxSide / maxDimension;
-      targetW = Math.round(targetW * resizeRatio);
-      targetH = Math.round(targetH * resizeRatio);
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    // 绘制裁切部分
-    ctx.drawImage(
-      imgEl,
-      sourceX, sourceY, Math.round(cropState.w * scaleX), Math.round(cropState.h * scaleY),
-      0, 0, targetW, targetH
-    );
-
-    // 获取原始图片的 mimeType，平衡清晰度与体积
-    const mimeType = imageBlob.type || 'image/jpeg';
-    const quality = mimeType === 'image/png' ? undefined : 0.88;
-    const blob = await new Promise((resolve) => {
-      canvas.toBlob(resolve, mimeType, quality);
-    });
-
-    return { blob, width: targetW, height: targetH, mimeType };
-  };
-
-  // 生成新文件名：原文件名-裁剪.ext
-  const generateCroppedName = (originalName) => {
-    const lastDot = originalName.lastIndexOf('.');
-    if (lastDot > 0) {
-      const base = originalName.substring(0, lastDot);
-      const ext = originalName.substring(lastDot);
-      return `${base}-裁剪${ext}`;
-    }
-    return `${originalName}-裁剪.jpg`;
-  };
-
-  // 保存到云盘（未分类）
-  modal.querySelector('#crop-btn-save').onclick = async () => {
-    const saveBtn = modal.querySelector('#crop-btn-save');
-    saveBtn.disabled = true;
-    toast('正在生成并上传裁切图片…');
-
-    try {
-      const { blob, width, height, mimeType } = await generateCroppedBlob();
-      const croppedName = generateCroppedName(photo.name);
-      const date = new Date();
-      const ext = (croppedName.split('.').pop() || 'jpg').toLowerCase();
-      const key = `photos/${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${uuid()}.${ext}`;
-
-      const file = new File([blob], croppedName, { type: mimeType });
-
-      // 上传到 R2
-      await r2.put(key, file, (done, total) => {
-        toast(`正在上传裁切图片 ${Math.round((done / total) * 100)}%`);
-      });
-
-      const newPhoto = {
-        id: uuid(),
-        key,
-        name: croppedName,
-        size: blob.size,
-        takenAt: date.toISOString(),
-        uploadedAt: date.toISOString(),
-        album: '', // 标记为未分类
-        tags: [],
-        dimensions: `${width} × ${height}`,
-        trashed: false
-      };
-
-      index.photos.unshift(newPhoto);
-      await save();
-      cleanupModal();
-      renderApp();
-      toast(`裁切图片已保存为「${croppedName}」（未分类）`);
-    } catch (err) {
-      toast(`保存失败：${err.message}`, true);
-      saveBtn.disabled = false;
-    }
-  };
-
-  // 下载到本地
-  modal.querySelector('#crop-btn-download').onclick = async () => {
-    try {
-      toast('正在导出裁切图片…');
-      const { blob } = await generateCroppedBlob();
-      const croppedName = generateCroppedName(photo.name);
-      const a = Object.assign(document.createElement('a'), {
-        href: URL.createObjectURL(blob),
-        download: croppedName
-      });
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      toast(`已开始下载「${croppedName}」`);
-    } catch (err) {
-      toast(`下载失败：${err.message}`, true);
-    }
-  };
-
-  // 分享裁切图片
-  modal.querySelector('#crop-btn-share').onclick = async () => {
-    try {
-      toast('正在准备分享裁切图片…');
-      const { blob, mimeType } = await generateCroppedBlob();
-      const croppedName = generateCroppedName(photo.name);
-      const file = new File([blob], croppedName, { type: mimeType });
-
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: croppedName
-        });
-      } else {
-        toast('当前浏览器或系统不支持直接分享图片文件，请先下载后发送。', true);
-      }
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        toast(`分享失败：${err.message}`, true);
-      }
-    }
-  };
-
-  // 取消
-  modal.querySelector('#crop-btn-cancel').onclick = () => {
-    cleanupModal();
-  };
-}
-
-/**
- * 手势滑动与双击缩放支持 (向下兼容保留)
+ * 手势滑动与双击缩放支持
  */
 function gesture(stage, left, right) {
-  initViewerZoomAndPan(stage, left, right);
+  if (!stage) return;
+  let startX, scale = 1;
+  stage.onpointerdown = e => {
+    startX = e.clientX;
+    stage.setPointerCapture(e.pointerId);
+  };
+  stage.onpointerup = e => {
+    if (Math.abs(e.clientX - startX) > 60) {
+      e.clientX < startX ? right() : left();
+    }
+  };
+  stage.ondblclick = () => {
+    scale = scale === 1 ? 2 : 1;
+    const img = stage.querySelector('img');
+    if (img) img.style.transform = `scale(${scale})`;
+  };
 }
 
 /**
  * 获取图片尺寸宽高
- * 采用异步非阻塞方式，优先创建小位图避免解压几千万像素原图造成主线程 GC 掉帧
  */
 async function imageDimensions(file) {
   try {
-    // 尽量通过 resizeOptions 或 createImageBitmap 读取
-    const bitmap = await createImageBitmap(file, { resizeWidth: 100, resizeQuality: 'low' }).catch(() => null);
-    if (bitmap) {
-      // 如果浏览器支持，可由原生解析；若不支持自定义尺寸解压，采用常规 Image 对象
-      bitmap.close?.();
-    }
-    // 使用轻量 Image 异步获取自然宽高
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(file);
-      const tempImg = new Image();
-      tempImg.onload = () => {
-        const dims = `${tempImg.naturalWidth} × ${tempImg.naturalHeight}`;
-        URL.revokeObjectURL(url);
-        resolve(dims);
-      };
-      tempImg.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve('');
-      };
-      tempImg.src = url;
-    });
+    const bitmap = await createImageBitmap(file);
+    return `${bitmap.width} × ${bitmap.height}`;
   } catch {
     return '';
   }
