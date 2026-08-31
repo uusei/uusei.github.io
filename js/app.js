@@ -1620,29 +1620,49 @@ function renderSetup(saved = {}) {
     <section class="setup">
       <div class="logo">📸</div>
       <h1>云端相册配置</h1>
-      <p>照片直接保存到您自己的 Cloudflare R2 存储桶。凭据仅保存在此设备浏览器中，不会上传至任何第三方服务器。</p>
+      <p>照片直接保存到您自己的 Cloudflare R2 存储桶。凭据仅保存在此设备浏览器本地，不会上传至任何第三方服务器。</p>
       <ol style="margin-left: 20px; margin-bottom: 16px; color: var(--muted); line-height: 1.8;">
         <li>登录 Cloudflare 控制台并创建 R2 存储桶</li>
         <li>创建拥有对象读写权限的 R2 API 令牌</li>
-        <li>填写下面的凭据并测试连接</li>
+        <li>填写下面的存储凭据并连接</li>
       </ol>
-      <form id="setup-form">
-        <label>Account ID<input required name="accountId" value="${esc(saved.accountId)}"></label>
-        <label>Access Key ID<input required name="accessKeyId" value="${esc(saved.accessKeyId)}"></label>
-        <label>Secret Access Key<input required type="password" name="secretAccessKey" value="${esc(saved.secretAccessKey)}"></label>
-        <label>Bucket 名称<input required name="bucket" value="${esc(saved.bucket)}"></label>
+      <form id="setup-form" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <label>Account ID<input required name="accountId" autocomplete="off" value="${esc(saved.accountId)}"></label>
+        <label>Access Key ID<input required name="accessKeyId" autocomplete="off" value="${esc(saved.accessKeyId)}"></label>
+        <label>Secret Access Key
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input required type="password" id="input-secret-key" name="secretAccessKey" autocomplete="new-password" style="flex: 1;" value="${esc(saved.secretAccessKey)}">
+            <button type="button" id="btn-toggle-secret" class="btn btn-secondary" style="padding: 0 12px; height: 42px; font-size: 0.85rem;" title="显示/隐藏密钥">👁️</button>
+          </div>
+        </label>
+        <label>Bucket 名称<input required name="bucket" autocomplete="off" value="${esc(saved.bucket)}"></label>
         <label>
           图片域名 Base URL (可选)
-          <input name="imgBaseUrl" placeholder="例如：https://cdn.example.com 或 https://pub-xxx.r2.dev" value="${esc(currentBaseUrl)}">
+          <input name="imgBaseUrl" autocomplete="off" placeholder="例如：https://cdn.example.com 或 https://pub-xxx.r2.dev" value="${esc(currentBaseUrl)}">
           <small style="color: var(--muted); font-size: 0.8rem; display: block; margin-top: 4px;">
             用于公开直链加速、图片外链复制及分享。留空则通过 R2 接口获取。
           </small>
         </label>
         <button type="submit" class="primary">测试连接并保存</button>
       </form>
-      <p class="help" style="margin-top: 14px;">详细开通与 CORS 配置请见 <a href="./README.md" target="_blank">README.md</a>。</p>
+      <p class="help" style="margin-top: 14px;">详细开通与 CORS 配置请见 <a href="./README.md" target="_blank" rel="noopener noreferrer">README.md</a>。</p>
     </section>
   `;
+
+  // 显隐密钥逻辑
+  const toggleBtn = document.querySelector('#btn-toggle-secret');
+  const secretInput = document.querySelector('#input-secret-key');
+  if (toggleBtn && secretInput) {
+    toggleBtn.onclick = () => {
+      if (secretInput.type === 'password') {
+        secretInput.type = 'text';
+        toggleBtn.textContent = '🙈';
+      } else {
+        secretInput.type = 'password';
+        toggleBtn.textContent = '👁️';
+      }
+    };
+  }
 
   document.querySelector('#setup-form').onsubmit = async (event) => {
     event.preventDefault();
