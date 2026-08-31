@@ -61,6 +61,25 @@ function getPublicImageUrl(key) {
 }
 
 /**
+ * 获取适用于查看器的高清大图 URL
+ * 如果开启了 Cloudflare 缩放优化，则采用适合大屏展示的 1920px 宽度，质量 85，format=auto，兼顾极速加载与清晰度
+ * 否则返回原始直链
+ * @param {string} key 对象的 key 路径
+ * @param {number} width 大图目标最大宽度（默认 1920px）
+ * @returns {string}
+ */
+function getViewerImageUrl(key, width = 1920) {
+  const base = config.getImgBaseUrl();
+  if (!base || !key) return '';
+  const cleanKey = String(key).replace(/^\/+/, '');
+  
+  if (config.getCfResizeEnabled()) {
+    return `${base}/thumb/width=${width},quality=85,format=auto/${cleanKey}`;
+  }
+  return `${base}/${cleanKey}`;
+}
+
+/**
  * 获取适用于缩略图的图片 URL
  * 如果开启了缩略图裁剪，则拼接 /thumb/width=360,quality=75,format=auto/ 参数
  * 否则返回普通直链
@@ -1775,8 +1794,9 @@ function openViewer(photo, photos) {
 
   const img = document.querySelector('#image-stage img');
 
-  // 加载大图逻辑：配置了图片域名则优先直链加载，失败或未配置时回退到 R2 SDK 拉取 Blob
-  if (publicUrl) {
+  // 加载大图逻辑：配置了图片域名则优先直链加载（开启CF缩放下自动使用适合屏幕的高清图并支持渐进平滑过渡），失败或未配置时回退到 R2 SDK 拉取 Blob
+  const viewerImageUrl = getViewerImageUrl(photo.key);
+  if (viewerImageUrl) {
     img.onerror = async () => {
       img.onerror = null;
       try {
@@ -1787,7 +1807,7 @@ function openViewer(photo, photos) {
         toast(`图片加载失败：${err.message}`, true);
       }
     };
-    img.src = publicUrl;
+    img.src = viewerImageUrl;
   } else {
     r2.get(photo.key)
       .then(res => res.blob())
