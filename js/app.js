@@ -95,7 +95,7 @@ async function loadPhotoHighResUrl(key) {
   }
 
   const task = (async () => {
-    const publicUrl = getPublicImageUrl(key);
+    const publicUrl = getViewerImageUrl(key);
     if (publicUrl) {
       // 预先检测直链是否可用
       try {
@@ -147,6 +147,56 @@ function getPublicImageUrl(key) {
   if (!base || !key) return '';
   const cleanKey = String(key).replace(/^\/+/, '');
   return `${base}/${cleanKey}`;
+}
+
+/**
+ * 获取适用于缩略图的图片 URL
+ * 如果开启了 Cloudflare 缩放优化，则拼接 /thumb/width=360,quality=75,format=auto/ 参数
+ * 否则返回普通直链
+ * @param {string} key 对象的 key 路径
+ * @param {number} width 缩略图目标宽度（默认 360px）
+ * @returns {string}
+ */
+function getThumbnailUrl(key, width = 360) {
+  const base = config.getImgBaseUrl();
+  if (!base || !key) return '';
+  const cleanKey = String(key).replace(/^\/+/, '');
+
+  if (config.getCfResizeEnabled()) {
+    return `${base}/thumb/width=${width},quality=75,format=auto/${cleanKey}`;
+  }
+  return `${base}/${cleanKey}`;
+}
+
+/**
+ * 获取适用于查看器的高清大图 URL
+ * 如果开启了 Cloudflare 缩放优化，则采用 1920px 限制以兼顾清晰度与加载极速
+ * 否则返回原始直链
+ * @param {string} key 对象的 key 路径
+ * @param {number} width 大图目标最大宽度（默认 1920px）
+ * @returns {string}
+ */
+function getViewerImageUrl(key, width = 1920) {
+  const base = config.getImgBaseUrl();
+  if (!base || !key) return '';
+  const cleanKey = String(key).replace(/^\/+/, '');
+
+  if (config.getCfResizeEnabled()) {
+    return `${base}/thumb/width=${width},quality=85,format=auto/${cleanKey}`;
+  }
+  return `${base}/${cleanKey}`;
+}
+
+/**
+ * 应用低性能 / 减少动效模式
+ */
+function applyPerformanceMode() {
+  const reduceMotion = config.getReduceMotion();
+  if (reduceMotion) {
+    document.documentElement.classList.add('reduce-motion');
+  } else {
+    document.documentElement.classList.remove('reduce-motion');
+  }
 }
 
 /**
@@ -245,6 +295,7 @@ function setupServiceWorker() {
  */
 async function init() {
   setupServiceWorker();
+  applyPerformanceMode();
   
   const saved = config.get();
   if (!saved) {
@@ -509,13 +560,13 @@ function renderPhotosBatch(reset = false) {
  */
 function renderPhotoCard(photo) {
   const isChecked = selected.has(photo.id);
-  const publicUrl = getPublicImageUrl(photo.key);
+  const thumbUrl = getThumbnailUrl(photo.key, 360);
   return `
     <article class="photo-card ${isChecked ? 'selected' : ''}" data-id="${photo.id}">
       <img data-key="${esc(photo.key)}" 
-           ${publicUrl ? `src="${esc(publicUrl)}"` : ''} 
+           ${thumbUrl ? `src="${esc(thumbUrl)}"` : ''} 
            alt="${esc(photo.name)}" 
-           data-loaded="${publicUrl ? 'true' : 'false'}" 
+           data-loaded="${thumbUrl ? 'true' : 'false'}" 
            loading="lazy">
       <div class="check-indicator" data-check-id="${photo.id}" title="多选勾选">✓</div>
       <div class="photo-info-bar">
@@ -528,7 +579,7 @@ function renderPhotoCard(photo) {
 
 /**
  * 懒加载缩略图
- * 优先使用自定义图片域名直链，如未配置或加载失败则回退到 R2 SDK 获取 Blob
+ * 优先使用自定义图片域名直链（含实时缩略图），如未配置或加载失败则回退到 R2 SDK 获取 Blob
  */
 async function loadLazyThumbnails() {
   const images = document.querySelectorAll('img[data-key]');
@@ -536,11 +587,11 @@ async function loadLazyThumbnails() {
     const key = img.dataset.key;
     if (!key) continue;
 
-    const publicUrl = getPublicImageUrl(key);
+    const thumbUrl = getThumbnailUrl(key, 360);
 
-    if (publicUrl) {
+    if (thumbUrl) {
       // 已经设置并成功加载了直链则跳过
-      if (img.dataset.loaded === 'true' && img.src === publicUrl) continue;
+      if (img.dataset.loaded === 'true' && img.src === thumbUrl) continue;
 
       img.onerror = async () => {
         img.onerror = null;
@@ -556,7 +607,7 @@ async function loadLazyThumbnails() {
       img.onload = () => {
         img.dataset.loaded = 'true';
       };
-      img.src = publicUrl;
+      img.src = thumbUrl;
       continue;
     }
 
@@ -1339,6 +1390,8 @@ async function download(photo) {
  */
 function renderSettings() {
   const currentBaseUrl = config.getImgBaseUrl();
+  const cfResizeEnabled = config.getCfResizeEnabled();
+  const reduceMotion = config.getReduceMotion();
   const sampleKey = index.photos && index.photos[0] ? index.photos[0].key : 'photos/2026/08/sample.jpg';
   const sampleUrl = currentBaseUrl ? `${currentBaseUrl}/${sampleKey}` : '';
 
@@ -1347,6 +1400,38 @@ function renderSettings() {
       <h1>⚙️ 相册设置</h1>
       <p>Cloudflare R2 存储凭据及图片域名仅安全保存在当前浏览器的 localStorage 中。</p>
       
+      <!-- 性能与动效设置卡片 -->
+      <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
+        <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
+          <span>⚡ 移动端性能与显示偏好</span>
+        </h3>
+        <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; line-height: 1.5;">
+          针对低性能设备、弱网或省电需求优化体验。
+        </p>
+
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
+            <input type="checkbox" id="chk-reduce-motion" ${reduceMotion ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
+            <div>
+              <strong>极速省电模式 / 关闭动画</strong>
+              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
+                关闭毛玻璃模糊特效、悬浮缩放动画与全屏查看器过渡，大幅减轻 GPU 负载并解决移动端发热与卡顿。
+              </div>
+            </div>
+          </label>
+
+          <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.92rem;">
+            <input type="checkbox" id="chk-cf-resize" ${cfResizeEnabled ? 'checked' : ''} style="margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand);">
+            <div>
+              <strong>开启 Cloudflare 实时缩略图裁剪 (Image Resizing)</strong>
+              <div style="font-size: 0.8rem; color: var(--muted); margin-top: 2px;">
+                列表页自动请求 <code>/thumb/width=360,quality=75,format=auto/</code> 动态压缩 WebP 缩略图（需要你的自定义域名或 Worker 规则支持）。
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <!-- 图片域名 Base URL 配置卡片 -->
       <div style="margin: 20px 0; padding: 18px; background: var(--bg); border-radius: 12px; border: 1px solid var(--line);">
         <h3 style="margin-top: 0; font-size: 1.05rem; display: flex; align-items: center; justify-content: space-between;">
@@ -1419,6 +1504,25 @@ function renderSettings() {
       } else {
         previewBox.textContent = '留空则使用 R2 私有直连拉取 Blob。';
       }
+    };
+  }
+
+  // 监听极速省电模式开关
+  const chkReduceMotion = document.querySelector('#chk-reduce-motion');
+  if (chkReduceMotion) {
+    chkReduceMotion.onchange = () => {
+      config.setReduceMotion(chkReduceMotion.checked);
+      applyPerformanceMode();
+      toast(chkReduceMotion.checked ? '已开启极速省电模式' : '已恢复标准动画效果');
+    };
+  }
+
+  // 监听 Cloudflare 缩略图开关
+  const chkCfResize = document.querySelector('#chk-cf-resize');
+  if (chkCfResize) {
+    chkCfResize.onchange = () => {
+      config.setCfResizeEnabled(chkCfResize.checked);
+      toast(chkCfResize.checked ? '已启用 Cloudflare 缩略图裁剪' : '已关闭 Cloudflare 缩略图裁剪');
     };
   }
 
