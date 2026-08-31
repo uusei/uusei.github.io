@@ -2377,35 +2377,47 @@ async function openCropModal(photo) {
     modal.remove();
   };
 
-  // 生成裁切后的 Blob 及图片对象
+  // 生成裁切后的 Blob 及图片对象（支持超大分辨率自适应优化与防模糊插值）
   const generateCroppedBlob = async () => {
     const scaleX = cropState.imgNaturalW / cropState.imgRenderW;
     const scaleY = cropState.imgNaturalH / cropState.imgRenderH;
 
     const sourceX = Math.round(cropState.x * scaleX);
     const sourceY = Math.round(cropState.y * scaleY);
-    const sourceW = Math.round(cropState.w * scaleX);
-    const sourceH = Math.round(cropState.h * scaleY);
+    let targetW = Math.round(cropState.w * scaleX);
+    let targetH = Math.round(cropState.h * scaleY);
+
+    // 最大边长限制在 3840px (4K 超高清)，既保证极端细腻的画质，又防止手机原图裁切后文件体积爆炸
+    const maxSide = 3840;
+    const maxDimension = Math.max(targetW, targetH);
+    if (maxDimension > maxSide) {
+      const resizeRatio = maxSide / maxDimension;
+      targetW = Math.round(targetW * resizeRatio);
+      targetH = Math.round(targetH * resizeRatio);
+    }
 
     const canvas = document.createElement('canvas');
-    canvas.width = sourceW;
-    canvas.height = sourceH;
+    canvas.width = targetW;
+    canvas.height = targetH;
     const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     // 绘制裁切部分
     ctx.drawImage(
       imgEl,
-      sourceX, sourceY, sourceW, sourceH,
-      0, 0, sourceW, sourceH
+      sourceX, sourceY, Math.round(cropState.w * scaleX), Math.round(cropState.h * scaleY),
+      0, 0, targetW, targetH
     );
 
-    // 获取原始图片的 mimeType
+    // 获取原始图片的 mimeType，平衡清晰度与体积
     const mimeType = imageBlob.type || 'image/jpeg';
+    const quality = mimeType === 'image/png' ? undefined : 0.88;
     const blob = await new Promise((resolve) => {
-      canvas.toBlob(resolve, mimeType, 0.92);
+      canvas.toBlob(resolve, mimeType, quality);
     });
 
-    return { blob, width: sourceW, height: sourceH, mimeType };
+    return { blob, width: targetW, height: targetH, mimeType };
   };
 
   // 生成新文件名：原文件名-裁剪.ext

@@ -1502,16 +1502,19 @@ dialog#viewer {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 16px;
+  padding: 24px 20px;
   box-sizing: border-box;
 }
 
 #crop-modal .crop-wrapper {
   position: relative;
-  display: inline-block;
-  max-width: 100%;
-  max-height: 100%;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100% - 20px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
 }
 
 #crop-modal .crop-image {
@@ -1520,8 +1523,11 @@ dialog#viewer {
   max-height: 100%;
   width: auto;
   height: auto;
+  max-height: calc(100dvh - 180px);
+  max-width: calc(100vw - 48px);
   object-fit: contain;
   pointer-events: none;
+  border-radius: 4px;
 }
 
 /* 裁剪暗色蒙版与选框 */
