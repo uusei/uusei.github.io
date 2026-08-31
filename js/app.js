@@ -2144,6 +2144,13 @@ function initViewerZoomAndPan(stage, onPrev, onNext) {
 function gesture(stage, left, right) {
   initViewerZoomAndPan(stage, left, right);
 }
+
+/**
+ * 打开图片裁切模态框
+ * @param {Object} photo 照片对象
+ */
+async function openCropModal(photo) {
+  if (!photo) return;
   toast('正在加载图片…');
   let imageBlob = null;
   let imageUrl = null;
@@ -2512,28 +2519,6 @@ function gesture(stage, left, right) {
   // 取消
   modal.querySelector('#crop-btn-cancel').onclick = () => {
     cleanupModal();
-  };
-}
-
-/**
- * 手势滑动与双击缩放支持
- */
-function gesture(stage, left, right) {
-  if (!stage) return;
-  let startX, scale = 1;
-  stage.onpointerdown = e => {
-    startX = e.clientX;
-    stage.setPointerCapture(e.pointerId);
-  };
-  stage.onpointerup = e => {
-    if (Math.abs(e.clientX - startX) > 60) {
-      e.clientX < startX ? right() : left();
-    }
-  };
-  stage.ondblclick = () => {
-    scale = scale === 1 ? 2 : 1;
-    const img = stage.querySelector('img');
-    if (img) img.style.transform = `scale(${scale})`;
   };
 }
 
