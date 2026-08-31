@@ -1181,7 +1181,13 @@ async function batchMoveAlbum() {
 /**
  * 文件上传逻辑
  */
-input.onchange = () => upload([...input.files]);
+input.onchange = () => {
+  const selectedFiles = [...input.files];
+  // 延迟一帧执行，给移动端系统相册弹窗关闭与主线程释放渲染时间
+  setTimeout(() => {
+    upload(selectedFiles);
+  }, 100);
+};
 
 async function upload(files) {
   if (!files || !files.length) return;
@@ -2134,11 +2140,31 @@ function gesture(stage, left, right) {
 
 /**
  * 获取图片尺寸宽高
+ * 采用异步非阻塞方式，优先创建小位图避免解压几千万像素原图造成主线程 GC 掉帧
  */
 async function imageDimensions(file) {
   try {
-    const bitmap = await createImageBitmap(file);
-    return `${bitmap.width} × ${bitmap.height}`;
+    // 尽量通过 resizeOptions 或 createImageBitmap 读取
+    const bitmap = await createImageBitmap(file, { resizeWidth: 100, resizeQuality: 'low' }).catch(() => null);
+    if (bitmap) {
+      // 如果浏览器支持，可由原生解析；若不支持自定义尺寸解压，采用常规 Image 对象
+      bitmap.close?.();
+    }
+    // 使用轻量 Image 异步获取自然宽高
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const tempImg = new Image();
+      tempImg.onload = () => {
+        const dims = `${tempImg.naturalWidth} × ${tempImg.naturalHeight}`;
+        URL.revokeObjectURL(url);
+        resolve(dims);
+      };
+      tempImg.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve('');
+      };
+      tempImg.src = url;
+    });
   } catch {
     return '';
   }
